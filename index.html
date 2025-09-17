@@ -1,12 +1,12 @@
 <!DOCTYPE html>
-<html lang="de">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Ball Crusher - Daily Stats</title>
     <meta
       name="description"
-      content="Tägliche Spielergebnisse des Ball Crusher Events mit interaktiven Tages- und Spielerstatistiken."
+      content="Mobile daily leaderboard experience for Hany with interactive event and player stats."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -20,16 +20,20 @@
     <header>
       <div class="container hero">
         <div>
-          <h1>Ball Crusher Daily Stats</h1>
+          <h1>Hany's Ball Crusher Daily Stats</h1>
           <p>
-            Verfolge alle Ergebnisse des Ball Crusher Events in Echtzeit. Die Open
-            Stats zeigen dir die Tagessieger und komplette Ranglisten. Über die
-            Player Stats kannst du jeden Spieler finden und seine Performance über
-            alle Eventtage analysieren.
+            Track every Ball Crusher event result on the go. Open Stats highlights
+            each day's champion and full rankings, while Player Stats lets you
+            follow any competitor's journey across the entire event series.
           </p>
         </div>
         <div class="canvas-wrapper">
-          <canvas id="statsCanvas" width="540" height="260" aria-label="Animiere Statistik"></canvas>
+          <canvas
+            id="statsCanvas"
+            width="540"
+            height="260"
+            aria-label="Animated winner timeline for mobile"
+          ></canvas>
         </div>
       </div>
     </header>
@@ -37,7 +41,7 @@
       <section id="open-stats" aria-labelledby="open-stats-title">
         <div class="section-title">
           <h2 id="open-stats-title">Open Stats</h2>
-          <span class="day-label">Tägliche Gewinner &amp; Ranglisten</span>
+          <span class="day-label">Daily winners &amp; rankings</span>
         </div>
         <div id="open-stats-grid" class="card-grid" role="list"></div>
       </section>
@@ -45,47 +49,46 @@
       <section id="player-stats" aria-labelledby="player-stats-title">
         <div class="section-title">
           <h2 id="player-stats-title">Player Stats</h2>
-          <span class="day-label">Suche nach einem Spieler</span>
+          <span class="day-label">Look up any athlete</span>
         </div>
         <div class="search-panel">
           <div class="search-controls">
             <label for="player-search">
-              Spielername
+              Player name
               <input
                 type="search"
                 id="player-search"
                 name="player-search"
-                placeholder="z. B. player1"
+                placeholder="e.g. player1"
                 autocomplete="off"
                 list="player-suggestions"
               />
               <datalist id="player-suggestions"></datalist>
             </label>
             <label for="sort-field">
-              Sortieren nach
+              Sort by
               <select id="sort-field" name="sort-field">
-                <option value="day">Tag</option>
-                <option value="rank">Rang</option>
-                <option value="time">Zeit</option>
+                <option value="day">Day</option>
+                <option value="rank">Rank</option>
+                <option value="time">Time</option>
               </select>
             </label>
             <label for="sort-order">
-              Reihenfolge
+              Order
               <select id="sort-order" name="sort-order">
-                <option value="asc">Aufsteigend</option>
-                <option value="desc">Absteigend</option>
+                <option value="asc">Ascending</option>
+                <option value="desc">Descending</option>
               </select>
             </label>
           </div>
           <div id="player-results" class="player-results" aria-live="polite">
-            <p class="no-results">Suche nach einem Spieler, um Ergebnisse zu sehen.</p>
+            <p class="no-results">Search for a player to see their results.</p>
           </div>
         </div>
       </section>
     </main>
     <footer>
-      Daten werden täglich aktualisiert. Stelle sicher, dass die <code>day_stats.json</code>
-      Datei auf GitHub auf dem neuesten Stand ist.
+      Results refresh daily. Keep the <code>day_stats.json</code> file up to date on GitHub.
     </footer>
 
     <script src="assets/js/app.js" type="module"></script>
