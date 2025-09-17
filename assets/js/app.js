@@ -11,22 +11,25 @@ const canvas = document.getElementById('statsCanvas');
 let playerIndex = new Map();
 let currentPlayer = null;
 let winnerTimeline = [];
+let animationFrameId = null;
+let resizeTimerId = null;
 
 async function loadStats() {
   try {
     const response = await fetch(DATA_URL, { cache: 'no-cache' });
     if (!response.ok) {
-      throw new Error(`Fehler beim Laden der Daten (${response.status})`);
+      throw new Error(`Failed to load stats (${response.status})`);
     }
     const data = await response.json();
     if (!data || !Array.isArray(data.day_stats)) {
-      throw new Error('Unerwartetes Datenformat.');
+      throw new Error('Unexpected data shape.');
     }
     initialize(data.day_stats);
   } catch (error) {
     console.error(error);
-    openStatsGrid.innerHTML = `<p class="no-results">${error.message}. Prüfe den JSON-Endpunkt.</p>`;
-    playerResultsContainer.innerHTML = `<p class="no-results">${error.message}. Keine Spielersuche möglich.</p>`;
+    const message = `${error.message}. Please verify the JSON source.`;
+    openStatsGrid.innerHTML = `<p class="no-results">${message}</p>`;
+    playerResultsContainer.innerHTML = `<p class="no-results">${message}</p>`;
   }
 }
 
@@ -58,7 +61,7 @@ function buildWinnerTimeline(days) {
 function renderOpenStats(days) {
   openStatsGrid.innerHTML = '';
   if (!days.length) {
-    openStatsGrid.innerHTML = '<p class="no-results">Keine Tage vorhanden.</p>';
+    openStatsGrid.innerHTML = '<p class="no-results">No days available yet.</p>';
     return;
   }
 
@@ -90,13 +93,17 @@ function renderOpenStats(days) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'details-button';
-    button.textContent = 'Details anzeigen';
+    button.textContent = 'View details';
     button.setAttribute('aria-expanded', 'false');
 
-    header.append(label, winnerInfo, button);
-
     const collapse = document.createElement('div');
+    const collapseId = `day-${day.day}-results`;
+    collapse.id = collapseId;
     collapse.className = 'collapse';
+    collapse.hidden = true;
+    button.setAttribute('aria-controls', collapseId);
+
+    header.append(label, winnerInfo, button);
 
     const list = document.createElement('ul');
     list.className = 'player-list';
@@ -109,7 +116,7 @@ function renderOpenStats(days) {
         const left = document.createElement('div');
         left.className = 'player-name';
         left.innerHTML = `<strong>${ordinal(player.rank)}</strong> &nbsp; <a href="${buildInstagramLink(
-          player.name
+          player.name,
         )}" target="_blank" rel="noopener noreferrer">${player.name}</a>`;
 
         const right = document.createElement('span');
@@ -124,8 +131,9 @@ function renderOpenStats(days) {
 
     button.addEventListener('click', () => {
       const isOpen = collapse.classList.toggle('open');
+      collapse.hidden = !isOpen;
       button.setAttribute('aria-expanded', String(isOpen));
-      button.textContent = isOpen ? 'Details verbergen' : 'Details anzeigen';
+      button.textContent = isOpen ? 'Hide details' : 'View details';
     });
 
     card.append(header, collapse);
@@ -160,7 +168,7 @@ function populatePlayerSuggestions() {
   playerSuggestions.innerHTML = '';
   const sortedPlayers = Array.from(playerIndex.values())
     .map((entry) => entry.name)
-    .sort((a, b) => a.localeCompare(b, 'de', { sensitivity: 'base' }));
+    .sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' }));
 
   sortedPlayers.forEach((name) => {
     const option = document.createElement('option');
@@ -174,7 +182,7 @@ function updatePlayerResults(options = {}) {
   const query = playerSearchInput.value.trim();
   if (!query) {
     currentPlayer = null;
-    playerResultsContainer.innerHTML = '<p class="no-results">Suche nach einem Spieler, um Ergebnisse zu sehen.</p>';
+    playerResultsContainer.innerHTML = '<p class="no-results">Search for a player to see their results.</p>';
     return;
   }
 
@@ -184,7 +192,7 @@ function updatePlayerResults(options = {}) {
   if (!entry && normalized.length >= 2) {
     const partialMatches = Array.from(playerIndex.entries())
       .map(([key, value]) => ({ key, value }))
-      .filter(({ key, value }) => value.name.toLowerCase().includes(normalized));
+      .filter(({ value }) => value.name.toLowerCase().includes(normalized));
 
     if (partialMatches.length === 1) {
       entry = partialMatches[0].value;
@@ -194,7 +202,7 @@ function updatePlayerResults(options = {}) {
   if (!entry) {
     currentPlayer = null;
     if (!silentOnNoMatch) {
-      playerResultsContainer.innerHTML = `<p class="no-results">Keine Ergebnisse für "${query}" gefunden.</p>`;
+      playerResultsContainer.innerHTML = `<p class="no-results">No results for "${query}".</p>`;
     }
     return;
   }
@@ -232,19 +240,19 @@ function renderPlayerResults(entry) {
     meta.innerHTML = `
       <span class="badge">Day ${record.day}</span>
       <strong>${entry.name}</strong>
-      <span class="time-badge">Zeit: ${record.time}</span>
+      <span class="time-badge">Time: ${record.time}</span>
     `;
 
     const rank = document.createElement('span');
     rank.className = 'badge rank-badge';
-    rank.textContent = `Rang ${record.rank}`;
+    rank.textContent = `Rank ${record.rank}`;
 
     card.append(meta, rank);
     playerResultsContainer.append(card);
   });
 
   if (!sortedRecords.length) {
-    playerResultsContainer.innerHTML = '<p class="no-results">Keine Ergebnisse vorhanden.</p>';
+    playerResultsContainer.innerHTML = '<p class="no-results">No results available.</p>';
   }
 }
 
@@ -253,26 +261,30 @@ function startCanvasAnimation() {
     return;
   }
 
+  if (animationFrameId) {
+    cancelAnimationFrame(animationFrameId);
+    animationFrameId = null;
+  }
+
   const ctx = canvas.getContext('2d');
-  const padding = 36;
-  const width = canvas.width;
-  const height = canvas.height;
-  const times = winnerTimeline.map((entry) => entry.seconds).filter((value) => Number.isFinite(value));
+  const { width, height } = resizeCanvas(canvas, ctx);
+
+  const times = winnerTimeline
+    .map((entry) => entry.seconds)
+    .filter((value) => Number.isFinite(value));
   const minTime = times.length ? Math.min(...times) : 0;
   const maxTime = times.length ? Math.max(...times) : 1;
   const dayCount = winnerTimeline.length;
-  const stepX = dayCount > 1 ? (width - padding * 2) / (dayCount - 1) : 0;
+  const stepX = dayCount > 1 ? (width - 72) / (dayCount - 1) : 0;
   const duration = 10000;
   let start = null;
 
   function mapY(seconds) {
-    if (!Number.isFinite(seconds)) {
-      return height / 2;
-    }
-    if (maxTime === minTime) {
+    if (!Number.isFinite(seconds) || maxTime === minTime) {
       return height / 2;
     }
     const normalized = (seconds - minTime) / (maxTime - minTime);
+    const padding = 36;
     return height - padding - normalized * (height - padding * 2);
   }
 
@@ -291,6 +303,7 @@ function startCanvasAnimation() {
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, width, height);
 
+    const padding = 36;
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -355,10 +368,25 @@ function startCanvasAnimation() {
     ctx.font = '14px Inter, sans-serif';
     ctx.fillText(`Day ${current.day} – ${current.name}`, padding, padding - 8);
 
-    requestAnimationFrame(drawFrame);
+    animationFrameId = requestAnimationFrame(drawFrame);
   }
 
-  requestAnimationFrame(drawFrame);
+  animationFrameId = requestAnimationFrame(drawFrame);
+}
+
+function resizeCanvas(canvasElement, ctx) {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvasElement.getBoundingClientRect();
+  const width = rect.width;
+  const height = Math.max(180, Math.round(width * 0.55));
+
+  canvasElement.width = Math.round(width * dpr);
+  canvasElement.height = Math.round(height * dpr);
+  canvasElement.style.height = `${height}px`;
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  return { width, height };
 }
 
 function parseTimeToSeconds(timeString) {
@@ -399,7 +427,20 @@ playerSearchInput.addEventListener('input', () => {
     updatePlayerResults({ silentOnNoMatch: true });
   }
 });
+
 sortFieldSelect.addEventListener('change', () => currentPlayer && renderPlayerResults(currentPlayer));
 sortOrderSelect.addEventListener('change', () => currentPlayer && renderPlayerResults(currentPlayer));
+
+window.addEventListener('resize', () => {
+  if (!winnerTimeline.length) {
+    return;
+  }
+  if (resizeTimerId) {
+    clearTimeout(resizeTimerId);
+  }
+  resizeTimerId = setTimeout(() => {
+    startCanvasAnimation();
+  }, 120);
+});
 
 loadStats();
