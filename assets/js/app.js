@@ -14,38 +14,98 @@ let currentPlayer = null;
 let winnerTimeline = [];
 let canvasAnimationId = null;
 let canvasResizeHandler = null;
+let metricsUpdateId = null;
+let pendingMetricsOptions = { notifyCanvas: false };
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
-function applyMobileMetrics() {
-  const width = Math.max(window.innerWidth || document.documentElement.clientWidth || 0, 320);
-  const height = Math.max(window.innerHeight || document.documentElement.clientHeight || 0, 540);
+function getViewportSize() {
+  const visualViewport = window.visualViewport;
+  const rawWidth = visualViewport?.width ?? window.innerWidth ?? document.documentElement.clientWidth ?? 0;
+  const rawHeight = visualViewport?.height ?? window.innerHeight ?? document.documentElement.clientHeight ?? 0;
+  const width = Math.max(Math.round(rawWidth), 280);
+  const height = Math.max(Math.round(rawHeight), 420);
+  return { width, height };
+}
+
+function applyMobileMetrics(options = {}) {
+  const { notifyCanvas = false } = options;
+  const { width, height } = getViewportSize();
+  const orientation = width > height ? 'landscape' : 'portrait';
   const baseWidth = 390;
   const baseHeight = 844;
   const widthScale = width / baseWidth;
   const heightScale = height / baseHeight;
-  const blendScale = widthScale * 0.65 + heightScale * 0.35;
-  const scale = clamp(blendScale, 0.85, 1.2);
-  const layoutWidth = clamp(width * 0.94, 320, 620);
+  const areaScale = Math.sqrt(widthScale * heightScale);
+  const typeBias = orientation === 'landscape' ? 0.92 : 1.04;
+  const spacingBias = orientation === 'landscape' ? 0.96 : 1.08;
+  const layoutBias = orientation === 'landscape' ? 0.9 : 0.94;
+  const scale = clamp(areaScale * typeBias, 0.82, 1.28);
+  const spacingScale = clamp(areaScale * spacingBias, 0.85, 1.32);
+  const radiusScale = clamp(widthScale * 0.75 + heightScale * 0.25, 0.9, 1.25);
+  const shadowScale = clamp(areaScale, 0.85, 1.3);
+  const layoutWidth = clamp(width * layoutBias, 280, 640);
+  const devicePixelRatio = window.devicePixelRatio || 1;
 
   root.style.setProperty('--scale', scale.toFixed(4));
-  root.style.setProperty('--layout-max-width', `${layoutWidth}px`);
+  root.style.setProperty('--spacing-scale', spacingScale.toFixed(4));
+  root.style.setProperty('--radius-scale', radiusScale.toFixed(4));
+  root.style.setProperty('--shadow-scale', shadowScale.toFixed(4));
+  root.style.setProperty('--layout-max-width', `${layoutWidth.toFixed(2)}px`);
   root.style.setProperty('--viewport-width', `${width}px`);
   root.style.setProperty('--viewport-height', `${height}px`);
   root.style.setProperty('--vh', `${height * 0.01}px`);
   root.style.setProperty('--vw', `${width * 0.01}px`);
-}
+  root.style.setProperty('--device-pixel-ratio', devicePixelRatio.toFixed(2));
 
-applyMobileMetrics();
-window.addEventListener('resize', applyMobileMetrics, { passive: true });
-window.addEventListener('orientationchange', () => {
-  applyMobileMetrics();
-  if (typeof canvasResizeHandler === 'function') {
+  if (notifyCanvas && typeof canvasResizeHandler === 'function') {
     requestAnimationFrame(() => canvasResizeHandler());
   }
-});
+}
+
+function scheduleMetricsUpdate(options = {}) {
+  const { immediate = false, notifyCanvas = false } = options;
+  pendingMetricsOptions.notifyCanvas = pendingMetricsOptions.notifyCanvas || notifyCanvas;
+
+  if (immediate) {
+    if (metricsUpdateId) {
+      cancelAnimationFrame(metricsUpdateId);
+      metricsUpdateId = null;
+    }
+    const opts = pendingMetricsOptions;
+    pendingMetricsOptions = { notifyCanvas: false };
+    applyMobileMetrics(opts);
+    return;
+  }
+
+  if (metricsUpdateId) {
+    return;
+  }
+
+  metricsUpdateId = requestAnimationFrame(() => {
+    metricsUpdateId = null;
+    const opts = pendingMetricsOptions;
+    pendingMetricsOptions = { notifyCanvas: false };
+    applyMobileMetrics(opts);
+  });
+}
+
+scheduleMetricsUpdate({ immediate: true });
+window.addEventListener('resize', () => scheduleMetricsUpdate(), { passive: true });
+window.addEventListener(
+  'orientationchange',
+  () => scheduleMetricsUpdate({ immediate: true, notifyCanvas: true }),
+  { passive: true }
+);
+
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', () => scheduleMetricsUpdate({ notifyCanvas: true }), {
+    passive: true,
+  });
+  window.visualViewport.addEventListener('scroll', () => scheduleMetricsUpdate(), { passive: true });
+}
 
 async function loadStats() {
   try {
