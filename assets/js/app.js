@@ -13,6 +13,12 @@ const quickNavButtons = quickNav
   ? Array.from(quickNav.querySelectorAll('.quick-nav__button'))
   : [];
 
+const lastAppliedMetrics = {
+  width: 0,
+  height: 0,
+  orientation: '',
+};
+
 let playerIndex = new Map();
 let currentPlayer = null;
 let winnerTimeline = [];
@@ -25,31 +31,77 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
-function applyMobileMetrics() {
+function resolveViewportMeasure() {
   const viewport = window.visualViewport;
-  const rawWidth = viewport?.width || window.innerWidth || document.documentElement.clientWidth || 0;
-  const rawHeight = viewport?.height || window.innerHeight || document.documentElement.clientHeight || 0;
+  const widthCandidates = [
+    viewport?.width,
+    window.innerWidth,
+    document.documentElement.clientWidth,
+    typeof screen !== 'undefined' ? screen.width : undefined,
+  ];
+  const heightCandidates = [
+    window.innerHeight,
+    document.documentElement.clientHeight,
+    viewport?.height,
+    typeof screen !== 'undefined' ? screen.height : undefined,
+  ];
+  const width = widthCandidates.find((value) => Number.isFinite(value) && value > 0) || 0;
+  const layoutHeight = heightCandidates.find((value) => Number.isFinite(value) && value > 0) || 0;
+  return { viewport, width, layoutHeight };
+}
+
+function applyMobileMetrics({ force = false } = {}) {
+  const { viewport, width: rawWidth, layoutHeight } = resolveViewportMeasure();
+  const rawHeight = viewport?.height && viewport.height > 0 ? viewport.height : layoutHeight;
   const width = clamp(rawWidth, 280, 1100);
-  const height = clamp(rawHeight, 400, 1600);
+  const measuredHeight = clamp(layoutHeight || rawHeight || width * 1.6, 400, 1700);
+  const orientation = width >= measuredHeight ? 'landscape' : 'portrait';
+  const minPortraitHeight = width * 1.55;
+  const minLandscapeHeight = width * 0.75;
+  const heightFloor = orientation === 'portrait' ? minPortraitHeight : minLandscapeHeight;
+  const stableHeight = Math.max(measuredHeight, heightFloor);
+  const height = clamp(stableHeight, 420, 1800);
+
+  const widthChanged = Math.abs(width - lastAppliedMetrics.width) >= 0.75;
+  const heightChanged = Math.abs(height - lastAppliedMetrics.height) >= 120;
+  const orientationChanged = orientation !== lastAppliedMetrics.orientation;
+
+  if (!force && !widthChanged && !orientationChanged && !heightChanged) {
+    const vh = (layoutHeight || lastAppliedMetrics.height || height) * 0.01;
+    root.style.setProperty('--vh', `${vh.toFixed(4)}px`);
+    root.style.setProperty('--vw', `${(width * 0.01).toFixed(4)}px`);
+    return;
+  }
+
+  lastAppliedMetrics.width = width;
+  lastAppliedMetrics.height = height;
+  lastAppliedMetrics.orientation = orientation;
+
   const minDimension = Math.min(width, height);
   const maxDimension = Math.max(width, height);
   const pixelRatio = window.devicePixelRatio || 1;
-  const orientation = width >= height ? 'landscape' : 'portrait';
 
   const baseWidth = 390;
   const baseHeight = 844;
   const baseDiagonal = Math.hypot(baseWidth, baseHeight);
-  const diagonal = Math.hypot(width, height);
   const widthScale = width / baseWidth;
   const heightScale = height / baseHeight;
-  const diagonalScale = diagonal / baseDiagonal;
-  const averagedScale = (widthScale + heightScale + diagonalScale) / 3;
-  const densityCompensation = clamp(Math.sqrt(pixelRatio) / 1.5, 0.72, 1.12);
-  const fontScale = clamp(averagedScale / densityCompensation, 0.82, 1.24);
-  const spacingScale = clamp(averagedScale * (orientation === 'landscape' ? 0.92 : 1.02), 0.74, 1.32);
-  const radiusScale = clamp(averagedScale * 0.9, 0.68, 1.2);
-  const elevationScale = clamp(averagedScale * (orientation === 'landscape' ? 0.85 : 1.08), 0.75, 1.34);
-  const layoutWidth = clamp(width * (orientation === 'landscape' ? 0.82 : 0.94), 320, 720);
+  const diagonalScale = Math.hypot(width, height) / baseDiagonal;
+  const averagedScale = (widthScale * 2 + heightScale + diagonalScale) / 4;
+  const densityCompensation = clamp(Math.sqrt(pixelRatio) / 1.45, 0.75, 1.15);
+  const fontScale = clamp(averagedScale / densityCompensation, 0.85, 1.26);
+  const spacingScale = clamp(
+    (widthScale * 0.68 + heightScale * 0.32) * (orientation === 'landscape' ? 0.9 : 1.05),
+    0.78,
+    1.36,
+  );
+  const radiusScale = clamp(widthScale * 0.92, 0.72, 1.28);
+  const elevationScale = clamp(averagedScale * (orientation === 'landscape' ? 0.88 : 1.08), 0.8, 1.38);
+  const layoutWidth = clamp(
+    width * (orientation === 'landscape' ? 0.86 : 0.95),
+    Math.min(width, 320),
+    Math.min(width * 0.98, 760),
+  );
 
   root.style.setProperty('--scale', fontScale.toFixed(4));
   root.style.setProperty('--font-scale', fontScale.toFixed(4));
@@ -62,8 +114,9 @@ function applyMobileMetrics() {
   root.style.setProperty('--viewport-min', `${minDimension.toFixed(2)}px`);
   root.style.setProperty('--viewport-max', `${maxDimension.toFixed(2)}px`);
   root.style.setProperty('--pixel-ratio', pixelRatio.toFixed(3));
-  root.style.setProperty('--vh', `${height * 0.01}px`);
-  root.style.setProperty('--vw', `${width * 0.01}px`);
+  const vh = (layoutHeight || height) * 0.01;
+  root.style.setProperty('--vh', `${vh.toFixed(4)}px`);
+  root.style.setProperty('--vw', `${(width * 0.01).toFixed(4)}px`);
 }
 
 function scheduleMobileMetricsUpdate() {
@@ -76,12 +129,11 @@ function scheduleMobileMetricsUpdate() {
   });
 }
 
-scheduleMobileMetricsUpdate();
+applyMobileMetrics({ force: true });
 window.addEventListener('resize', scheduleMobileMetricsUpdate, { passive: true });
 window.addEventListener('orientationchange', scheduleMobileMetricsUpdate, { passive: true });
 if (window.visualViewport) {
   window.visualViewport.addEventListener('resize', scheduleMobileMetricsUpdate, { passive: true });
-  window.visualViewport.addEventListener('scroll', scheduleMobileMetricsUpdate, { passive: true });
 }
 
 function setActiveQuickNav(targetId) {

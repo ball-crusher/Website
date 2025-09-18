@@ -28,6 +28,8 @@
 
 html {
   font-size: calc(var(--base-font-size) * var(--font-scale));
+  height: 100%;
+  scroll-behavior: smooth;
 }
 
 * {
@@ -42,6 +44,9 @@ body {
   background: var(--bg-gradient);
   color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+  touch-action: pan-y;
+  overscroll-behavior-x: none;
   padding: max(env(safe-area-inset-top), 0px) max(env(safe-area-inset-right), 0px)
     max(env(safe-area-inset-bottom), 0px) max(env(safe-area-inset-left), 0px);
 }
