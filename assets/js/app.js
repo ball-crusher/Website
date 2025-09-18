@@ -1,6 +1,6 @@
 const DATA_URL = 'data/day_stats.json';
 
-const root = document.documentElement;
+const rootElement = document.documentElement;
 const openStatsGrid = document.getElementById('open-stats-grid');
 const playerSearchInput = document.getElementById('player-search');
 const playerResultsContainer = document.getElementById('player-results');
@@ -14,38 +14,46 @@ let currentPlayer = null;
 let winnerTimeline = [];
 let canvasAnimationId = null;
 let canvasResizeHandler = null;
+let viewportScaleRaf = null;
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
-function applyMobileMetrics() {
-  const width = Math.max(window.innerWidth || document.documentElement.clientWidth || 0, 320);
-  const height = Math.max(window.innerHeight || document.documentElement.clientHeight || 0, 540);
-  const baseWidth = 390;
-  const baseHeight = 844;
-  const widthScale = width / baseWidth;
-  const heightScale = height / baseHeight;
-  const blendScale = widthScale * 0.65 + heightScale * 0.35;
-  const scale = clamp(blendScale, 0.85, 1.2);
-  const layoutWidth = clamp(width * 0.94, 320, 620);
+function applyViewportScaling() {
+  const widthCandidates = [window.innerWidth, rootElement.clientWidth, window.screen?.width]
+    .map((value) => (Number.isFinite(value) && value > 0 ? value : null))
+    .filter((value) => value !== null);
+  const heightCandidates = [window.innerHeight, rootElement.clientHeight, window.screen?.height]
+    .map((value) => (Number.isFinite(value) && value > 0 ? value : null))
+    .filter((value) => value !== null);
 
-  root.style.setProperty('--scale', scale.toFixed(4));
-  root.style.setProperty('--layout-max-width', `${layoutWidth}px`);
-  root.style.setProperty('--viewport-width', `${width}px`);
-  root.style.setProperty('--viewport-height', `${height}px`);
-  root.style.setProperty('--vh', `${height * 0.01}px`);
-  root.style.setProperty('--vw', `${width * 0.01}px`);
+  const measuredWidth = clamp(Math.round(Math.min(...widthCandidates, 540) || 390), 320, 600);
+  const measuredHeight = clamp(Math.round(Math.min(...heightCandidates, 960) || 780), 540, 1100);
+  const baseFont = clamp(measuredWidth / 24, 14, 18);
+  const spaceUnit = clamp(measuredWidth / 20, 14, 26);
+  const radiusScale = clamp(measuredWidth / 375, 0.88, 1.18);
+
+  rootElement.style.setProperty('--device-width', `${measuredWidth}px`);
+  rootElement.style.setProperty('--device-height', `${measuredHeight}px`);
+  rootElement.style.setProperty('--base-font-size', `${baseFont}px`);
+  rootElement.style.setProperty('--space-unit', `${spaceUnit}px`);
+  rootElement.style.setProperty('--radius-scale', radiusScale.toFixed(3));
 }
 
-applyMobileMetrics();
-window.addEventListener('resize', applyMobileMetrics, { passive: true });
-window.addEventListener('orientationchange', () => {
-  applyMobileMetrics();
-  if (typeof canvasResizeHandler === 'function') {
-    requestAnimationFrame(() => canvasResizeHandler());
+function queueViewportScaling() {
+  if (viewportScaleRaf) {
+    cancelAnimationFrame(viewportScaleRaf);
   }
-});
+
+  viewportScaleRaf = requestAnimationFrame(() => {
+    viewportScaleRaf = null;
+    applyViewportScaling();
+    if (typeof canvasResizeHandler === 'function') {
+      canvasResizeHandler();
+    }
+  });
+}
 
 async function loadStats() {
   try {
@@ -166,25 +174,6 @@ function renderOpenStats(days) {
       collapse.hidden = !isOpen;
       button.setAttribute('aria-expanded', String(isOpen));
       button.textContent = isOpen ? 'Hide details' : 'More details';
-
-      if (isOpen) {
-        document.querySelectorAll('.collapse.open').forEach((openSection) => {
-          if (openSection === collapse) return;
-          openSection.classList.remove('open');
-          openSection.hidden = true;
-          const toggle = openSection.previousElementSibling?.querySelector?.('.details-button');
-          if (toggle) {
-            toggle.setAttribute('aria-expanded', 'false');
-            toggle.textContent = 'More details';
-          }
-        });
-
-        if (typeof collapse.scrollIntoView === 'function') {
-          requestAnimationFrame(() => {
-            collapse.scrollIntoView({ block: 'start', behavior: 'smooth' });
-          });
-        }
-      }
     });
 
     card.append(header, collapse);
@@ -313,10 +302,7 @@ function startCanvasAnimation() {
     canvasAnimationId = null;
   }
 
-  if (canvasResizeHandler) {
-    window.removeEventListener('resize', canvasResizeHandler);
-    canvasResizeHandler = null;
-  }
+  canvasResizeHandler = null;
 
   if (!canvas || !canvas.getContext || !winnerTimeline.length) {
     return;
@@ -336,13 +322,13 @@ function startCanvasAnimation() {
 
   function configureDimensions() {
     const parentWidth = canvas.parentElement?.clientWidth || window.innerWidth || 360;
-    const styles = getComputedStyle(root);
-    const layoutMax = parseFloat(styles.getPropertyValue('--layout-max-width')) || parentWidth;
-    const viewportWidth = parseFloat(styles.getPropertyValue('--viewport-width')) || parentWidth;
-    const viewportHeight = parseFloat(styles.getPropertyValue('--viewport-height')) || window.innerHeight || 640;
-    const maxWidth = Math.min(layoutMax, viewportWidth * 0.96);
-    const cssWidth = Math.min(parentWidth, Math.max(280, maxWidth));
-    const cssHeight = clamp(Math.round(cssWidth * 0.64), 200, Math.round(viewportHeight * 0.42));
+    const computedStyles = getComputedStyle(rootElement);
+    const targetWidth = parseFloat(computedStyles.getPropertyValue('--device-width')) || parentWidth;
+    const targetHeight = parseFloat(computedStyles.getPropertyValue('--device-height')) || window.innerHeight || targetWidth * 1.6;
+    const maxAllowedWidth = Math.min(parentWidth, targetWidth * 0.96);
+    const cssWidth = clamp(Math.round(maxAllowedWidth), 280, targetWidth);
+    const aspectRatio = clamp(targetHeight / targetWidth, 0.55, 0.85);
+    const cssHeight = clamp(Math.round(cssWidth * aspectRatio), 200, Math.round(targetHeight * 0.48));
     const dpr = window.devicePixelRatio || 1;
 
     canvas.style.width = `${cssWidth}px`;
@@ -353,7 +339,7 @@ function startCanvasAnimation() {
 
     width = cssWidth;
     height = cssHeight;
-    padding = Math.max(22, Math.round(cssWidth * 0.1));
+    padding = Math.max(18, Math.round(cssWidth * 0.08));
     stepX = dayCount > 1 ? (width - padding * 2) / (dayCount - 1) : 0;
   }
 
@@ -366,6 +352,10 @@ function startCanvasAnimation() {
     }
     const normalized = (seconds - minTime) / (maxTime - minTime);
     return height - padding - normalized * (height - padding * 2);
+  }
+
+  function mapX(index) {
+    return dayCount > 1 ? padding + index * stepX : width / 2;
   }
 
   function drawFrame(timestamp) {
@@ -396,7 +386,7 @@ function startCanvasAnimation() {
     ctx.beginPath();
 
     winnerTimeline.forEach((entry, index) => {
-      const x = padding + index * stepX;
+      const x = mapX(index);
       const y = mapY(entry.seconds);
       if (index === 0) {
         ctx.moveTo(x, y);
@@ -414,17 +404,36 @@ function startCanvasAnimation() {
     const baseIndex = Math.floor(cursorProgress);
     const fractional = cursorProgress - baseIndex;
 
+    winnerTimeline.forEach((entry, index) => {
+      const x = mapX(index);
+      const y = mapY(entry.seconds);
+      const passed = index <= cursorProgress;
+      ctx.fillStyle = passed ? 'rgba(14, 165, 233, 0.85)' : 'rgba(148, 163, 184, 0.35)';
+      ctx.beginPath();
+      ctx.arc(x, y, passed ? 5 : 4, 0, Math.PI * 2);
+      ctx.fill();
+
+      if (passed) {
+        const fade = clamp(1 - Math.max(0, cursorProgress - index), 0, 1);
+        ctx.strokeStyle = `rgba(6, 200, 255, ${0.45 * fade})`;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(x, y, 12 + fade * 10, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    });
+
     const current = winnerTimeline[Math.min(baseIndex, dayCount - 1)];
     const next = winnerTimeline[Math.min(baseIndex + 1, dayCount - 1)];
 
-    const currentX = padding + baseIndex * stepX;
+    const currentX = mapX(baseIndex);
     const currentY = mapY(current.seconds);
 
     let x = currentX;
     let y = currentY;
 
     if (next && baseIndex < dayCount - 1) {
-      const nextX = padding + (baseIndex + 1) * stepX;
+      const nextX = mapX(baseIndex + 1);
       const nextY = mapY(next.seconds);
       x = currentX + (nextX - currentX) * fractional;
       y = currentY + (nextY - currentY) * fractional;
@@ -461,7 +470,6 @@ function startCanvasAnimation() {
 
   configureDimensions();
   canvasAnimationId = requestAnimationFrame(drawFrame);
-  window.addEventListener('resize', canvasResizeHandler, { passive: true });
 }
 
 function parseTimeToSeconds(timeString) {
@@ -504,5 +512,9 @@ playerSearchInput.addEventListener('input', () => {
 });
 sortFieldSelect.addEventListener('change', () => currentPlayer && renderPlayerResults(currentPlayer));
 sortOrderSelect.addEventListener('change', () => currentPlayer && renderPlayerResults(currentPlayer));
+
+applyViewportScaling();
+window.addEventListener('resize', queueViewportScaling, { passive: true });
+window.addEventListener('orientationchange', queueViewportScaling);
 
 loadStats();
