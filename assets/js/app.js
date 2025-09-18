@@ -1,5 +1,6 @@
 const DATA_URL = 'data/day_stats.json';
 
+const root = document.documentElement;
 const openStatsGrid = document.getElementById('open-stats-grid');
 const playerSearchInput = document.getElementById('player-search');
 const playerResultsContainer = document.getElementById('player-results');
@@ -13,6 +14,51 @@ let currentPlayer = null;
 let winnerTimeline = [];
 let canvasAnimationId = null;
 let canvasResizeHandler = null;
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function debounce(fn, delay = 120) {
+  let timer;
+  return (...args) => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(() => fn(...args), delay);
+  };
+}
+
+function updateResponsiveScale() {
+  const screenObj = window.screen || {};
+  const width = window.innerWidth || screenObj.width || 390;
+  const height = window.innerHeight || screenObj.height || 844;
+  const normalizedWidth = clamp(width, 320, 640);
+  const normalizedHeight = clamp(height, 568, 1180);
+  const widthScale = normalizedWidth / 390;
+  const heightScale = normalizedHeight / 844;
+
+  const fontScale = clamp(widthScale * 0.6 + heightScale * 0.4, 0.9, 1.2);
+  const spacingScale = clamp(widthScale, 0.9, 1.35);
+  const radiusScale = clamp(widthScale * 0.95, 0.85, 1.2);
+  const buttonHeight = clamp(height * 0.07, 44, 68);
+  const maxWidth = clamp(normalizedWidth * 0.94, 340, 560);
+
+  root.style.setProperty('--font-scale', fontScale.toFixed(3));
+  root.style.setProperty('--spacing-scale', spacingScale.toFixed(3));
+  root.style.setProperty('--radius-scale', radiusScale.toFixed(3));
+  root.style.setProperty('--button-height', `${buttonHeight.toFixed(2)}px`);
+  root.style.setProperty('--max-page-width', `${maxWidth.toFixed(2)}px`);
+}
+
+const updateScaleDebounced = debounce(() => {
+  updateResponsiveScale();
+  if (typeof canvasResizeHandler === 'function') {
+    canvasResizeHandler();
+  }
+});
+
+updateResponsiveScale();
+window.addEventListener('resize', updateScaleDebounced, { passive: true });
+window.addEventListener('orientationchange', updateScaleDebounced);
 
 async function loadStats() {
   try {
@@ -92,7 +138,7 @@ function renderOpenStats(days) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'details-button';
-    button.textContent = 'View leaderboard';
+    button.textContent = 'More details';
     button.setAttribute('aria-expanded', 'false');
 
     header.append(label, winnerInfo, button);
@@ -132,7 +178,7 @@ function renderOpenStats(days) {
       const isOpen = collapse.classList.toggle('open');
       collapse.hidden = !isOpen;
       button.setAttribute('aria-expanded', String(isOpen));
-      button.textContent = isOpen ? 'Hide leaderboard' : 'View leaderboard';
+      button.textContent = isOpen ? 'Hide details' : 'More details';
     });
 
     card.append(header, collapse);
@@ -284,9 +330,11 @@ function startCanvasAnimation() {
 
   function configureDimensions() {
     const parentWidth = canvas.parentElement?.clientWidth || window.innerWidth || 360;
-    const cssWidth = Math.min(parentWidth, 440);
-    const cssHeight = Math.max(210, Math.round(cssWidth * 0.7));
-    const dpr = window.devicePixelRatio || 1;
+    const computedMax = parseFloat(getComputedStyle(root).getPropertyValue('--max-page-width')) || parentWidth;
+    const cssWidth = Math.min(parentWidth, computedMax);
+    const heightGuess = Math.round(cssWidth * 0.68);
+    const cssHeight = clamp(heightGuess, 200, Math.max(240, Math.round((window.innerHeight || 640) * 0.46)));
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
 
     canvas.style.width = `${cssWidth}px`;
     canvas.style.height = `${cssHeight}px`;
@@ -296,7 +344,7 @@ function startCanvasAnimation() {
 
     width = cssWidth;
     height = cssHeight;
-    padding = Math.max(22, Math.round(cssWidth * 0.1));
+    padding = Math.max(20, Math.round(cssWidth * 0.1));
     stepX = dayCount > 1 ? (width - padding * 2) / (dayCount - 1) : 0;
   }
 
@@ -356,6 +404,32 @@ function startCanvasAnimation() {
     const cursorProgress = progress * Math.max(dayCount - 1, 1);
     const baseIndex = Math.floor(cursorProgress);
     const fractional = cursorProgress - baseIndex;
+    const clearedProgress = baseIndex + fractional;
+
+    winnerTimeline.forEach((entry, index) => {
+      const x = padding + index * stepX;
+      const y = mapY(entry.seconds);
+      const progressDelta = Math.max(0, clearedProgress - index);
+      const cleared = progressDelta > 0.75;
+      const approaching = progressDelta > 0 && progressDelta <= 0.75;
+
+      ctx.save();
+      const radius = cleared ? 7 : 6;
+      const baseAlpha = cleared ? 0.18 : approaching ? 0.28 : 0.12;
+      ctx.fillStyle = `rgba(6, 200, 255, ${baseAlpha})`;
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.fill();
+
+      if (approaching) {
+        ctx.strokeStyle = 'rgba(6, 200, 255, 0.65)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(x, y, radius + 5, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.restore();
+    });
 
     const current = winnerTimeline[Math.min(baseIndex, dayCount - 1)];
     const next = winnerTimeline[Math.min(baseIndex + 1, dayCount - 1)];
@@ -386,9 +460,11 @@ function startCanvasAnimation() {
     ctx.arc(x, y, 6, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
-    ctx.font = '14px Inter, sans-serif';
-    ctx.fillText(`Day ${current.day} – ${current.name}`, padding, padding - 8);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.82)';
+    const labelFontSize = clamp(Math.round(width * 0.04), 12, 18);
+    ctx.font = `${labelFontSize}px Inter, sans-serif`;
+    const label = `Day ${current.day} • ${current.name} • ${current.time}`;
+    ctx.fillText(label, padding, padding - 8);
 
     canvasAnimationId = requestAnimationFrame(drawFrame);
   }
