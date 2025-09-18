@@ -70,7 +70,7 @@ function renderOpenStats(days) {
     card.setAttribute('role', 'listitem');
 
     const header = document.createElement('div');
-    header.className = 'day-card-header';
+    header.className = 'day-card-content';
 
     const label = document.createElement('div');
     label.className = 'day-label';
@@ -86,7 +86,7 @@ function renderOpenStats(days) {
     winnerLink.textContent = topPlayer ? topPlayer.name : '—';
 
     const winnerLabel = document.createElement('span');
-    winnerLabel.textContent = 'Winner';
+    winnerLabel.textContent = 'Daily winner';
     winnerInfo.append(winnerLink, winnerLabel);
 
     const button = document.createElement('button');
@@ -284,8 +284,8 @@ function startCanvasAnimation() {
 
   function configureDimensions() {
     const parentWidth = canvas.parentElement?.clientWidth || window.innerWidth || 360;
-    const cssWidth = Math.min(parentWidth, 420);
-    const cssHeight = Math.max(180, Math.round(cssWidth * 0.58));
+    const cssWidth = Math.min(parentWidth, 440);
+    const cssHeight = Math.max(210, Math.round(cssWidth * 0.7));
     const dpr = window.devicePixelRatio || 1;
 
     canvas.style.width = `${cssWidth}px`;
@@ -296,7 +296,7 @@ function startCanvasAnimation() {
 
     width = cssWidth;
     height = cssHeight;
-    padding = Math.max(20, Math.round(cssWidth * 0.08));
+    padding = Math.max(22, Math.round(cssWidth * 0.1));
     stepX = dayCount > 1 ? (width - padding * 2) / (dayCount - 1) : 0;
   }
 
