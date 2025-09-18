@@ -26,6 +26,7 @@
             <p class="hero__description">
               Monitor daily winners, dive into complete leaderboards, and study player trajectories with an interface that measures your device and scales every element for a distortion-free mobile experience.
             </p>
+            <p id="device-meta" class="hero__meta" aria-live="polite">Calibrating layout for your screen…</p>
           </div>
           <figure class="hero__visual">
             <canvas
@@ -89,6 +90,22 @@
           </div>
         </section>
       </main>
+
+      <nav class="mobile-nav" aria-label="Quick mobile navigation">
+        <span class="mobile-nav__indicator" aria-hidden="true"></span>
+        <button type="button" class="mobile-nav__button" data-nav-target="open-stats">
+          <span aria-hidden="true" class="mobile-nav__icon">📊</span>
+          <span class="mobile-nav__label">Open stats</span>
+        </button>
+        <button type="button" class="mobile-nav__button" data-nav-target="player-stats">
+          <span aria-hidden="true" class="mobile-nav__icon">🏅</span>
+          <span class="mobile-nav__label">Player stats</span>
+        </button>
+        <button type="button" class="mobile-nav__button" data-nav-action="scroll-top">
+          <span aria-hidden="true" class="mobile-nav__icon">⬆️</span>
+          <span class="mobile-nav__label">Top</span>
+        </button>
+      </nav>
 
       <footer class="page__footer">
         Data refreshes daily. Keep <code>day_stats.json</code> in sync on GitHub to surface the latest runs.
