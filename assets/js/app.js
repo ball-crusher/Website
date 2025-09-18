@@ -11,22 +11,24 @@ const canvas = document.getElementById('statsCanvas');
 let playerIndex = new Map();
 let currentPlayer = null;
 let winnerTimeline = [];
+let canvasAnimationId = null;
+let canvasResizeHandler = null;
 
 async function loadStats() {
   try {
     const response = await fetch(DATA_URL, { cache: 'no-cache' });
     if (!response.ok) {
-      throw new Error(`Fehler beim Laden der Daten (${response.status})`);
+      throw new Error(`Failed to load stats (${response.status})`);
     }
     const data = await response.json();
     if (!data || !Array.isArray(data.day_stats)) {
-      throw new Error('Unerwartetes Datenformat.');
+      throw new Error('Unexpected data format');
     }
     initialize(data.day_stats);
   } catch (error) {
     console.error(error);
-    openStatsGrid.innerHTML = `<p class="no-results">${error.message}. Prüfe den JSON-Endpunkt.</p>`;
-    playerResultsContainer.innerHTML = `<p class="no-results">${error.message}. Keine Spielersuche möglich.</p>`;
+    openStatsGrid.innerHTML = `<p class="no-results">${error.message}. Check the JSON endpoint.</p>`;
+    playerResultsContainer.innerHTML = `<p class="no-results">${error.message}. Player search unavailable.</p>`;
   }
 }
 
@@ -58,7 +60,7 @@ function buildWinnerTimeline(days) {
 function renderOpenStats(days) {
   openStatsGrid.innerHTML = '';
   if (!days.length) {
-    openStatsGrid.innerHTML = '<p class="no-results">Keine Tage vorhanden.</p>';
+    openStatsGrid.innerHTML = '<p class="no-results">No days available yet.</p>';
     return;
   }
 
@@ -90,13 +92,17 @@ function renderOpenStats(days) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'details-button';
-    button.textContent = 'Details anzeigen';
+    button.textContent = 'View leaderboard';
     button.setAttribute('aria-expanded', 'false');
 
     header.append(label, winnerInfo, button);
 
     const collapse = document.createElement('div');
     collapse.className = 'collapse';
+    const collapseId = `day-${day.day}-details`;
+    collapse.id = collapseId;
+    collapse.hidden = true;
+    button.setAttribute('aria-controls', collapseId);
 
     const list = document.createElement('ul');
     list.className = 'player-list';
@@ -124,8 +130,9 @@ function renderOpenStats(days) {
 
     button.addEventListener('click', () => {
       const isOpen = collapse.classList.toggle('open');
+      collapse.hidden = !isOpen;
       button.setAttribute('aria-expanded', String(isOpen));
-      button.textContent = isOpen ? 'Details verbergen' : 'Details anzeigen';
+      button.textContent = isOpen ? 'Hide leaderboard' : 'View leaderboard';
     });
 
     card.append(header, collapse);
@@ -160,7 +167,7 @@ function populatePlayerSuggestions() {
   playerSuggestions.innerHTML = '';
   const sortedPlayers = Array.from(playerIndex.values())
     .map((entry) => entry.name)
-    .sort((a, b) => a.localeCompare(b, 'de', { sensitivity: 'base' }));
+    .sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' }));
 
   sortedPlayers.forEach((name) => {
     const option = document.createElement('option');
@@ -174,7 +181,7 @@ function updatePlayerResults(options = {}) {
   const query = playerSearchInput.value.trim();
   if (!query) {
     currentPlayer = null;
-    playerResultsContainer.innerHTML = '<p class="no-results">Suche nach einem Spieler, um Ergebnisse zu sehen.</p>';
+    playerResultsContainer.innerHTML = '<p class="no-results">Search for a player to see results.</p>';
     return;
   }
 
@@ -194,7 +201,7 @@ function updatePlayerResults(options = {}) {
   if (!entry) {
     currentPlayer = null;
     if (!silentOnNoMatch) {
-      playerResultsContainer.innerHTML = `<p class="no-results">Keine Ergebnisse für "${query}" gefunden.</p>`;
+      playerResultsContainer.innerHTML = `<p class="no-results">No results for "${query}".</p>`;
     }
     return;
   }
@@ -232,38 +239,66 @@ function renderPlayerResults(entry) {
     meta.innerHTML = `
       <span class="badge">Day ${record.day}</span>
       <strong>${entry.name}</strong>
-      <span class="time-badge">Zeit: ${record.time}</span>
+      <span class="time-badge">Time: ${record.time}</span>
     `;
 
     const rank = document.createElement('span');
     rank.className = 'badge rank-badge';
-    rank.textContent = `Rang ${record.rank}`;
+    rank.textContent = `Rank ${record.rank}`;
 
     card.append(meta, rank);
     playerResultsContainer.append(card);
   });
 
   if (!sortedRecords.length) {
-    playerResultsContainer.innerHTML = '<p class="no-results">Keine Ergebnisse vorhanden.</p>';
+    playerResultsContainer.innerHTML = '<p class="no-results">No stats available.</p>';
   }
 }
 
 function startCanvasAnimation() {
+  if (canvasAnimationId) {
+    cancelAnimationFrame(canvasAnimationId);
+    canvasAnimationId = null;
+  }
+
+  if (canvasResizeHandler) {
+    window.removeEventListener('resize', canvasResizeHandler);
+    canvasResizeHandler = null;
+  }
+
   if (!canvas || !canvas.getContext || !winnerTimeline.length) {
     return;
   }
 
   const ctx = canvas.getContext('2d');
-  const padding = 36;
-  const width = canvas.width;
-  const height = canvas.height;
   const times = winnerTimeline.map((entry) => entry.seconds).filter((value) => Number.isFinite(value));
   const minTime = times.length ? Math.min(...times) : 0;
   const maxTime = times.length ? Math.max(...times) : 1;
   const dayCount = winnerTimeline.length;
-  const stepX = dayCount > 1 ? (width - padding * 2) / (dayCount - 1) : 0;
   const duration = 10000;
+  let width = canvas.clientWidth || canvas.width;
+  let height = canvas.clientHeight || canvas.height;
+  let padding = 24;
+  let stepX = 0;
   let start = null;
+
+  function configureDimensions() {
+    const parentWidth = canvas.parentElement?.clientWidth || window.innerWidth || 360;
+    const cssWidth = Math.min(parentWidth, 420);
+    const cssHeight = Math.max(180, Math.round(cssWidth * 0.58));
+    const dpr = window.devicePixelRatio || 1;
+
+    canvas.style.width = `${cssWidth}px`;
+    canvas.style.height = `${cssHeight}px`;
+    canvas.width = Math.round(cssWidth * dpr);
+    canvas.height = Math.round(cssHeight * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    width = cssWidth;
+    height = cssHeight;
+    padding = Math.max(20, Math.round(cssWidth * 0.08));
+    stepX = dayCount > 1 ? (width - padding * 2) / (dayCount - 1) : 0;
+  }
 
   function mapY(seconds) {
     if (!Number.isFinite(seconds)) {
@@ -309,7 +344,7 @@ function startCanvasAnimation() {
       if (index === 0) {
         ctx.moveTo(x, y);
       } else {
-        const visibleProgress = progress * (dayCount - 1);
+        const visibleProgress = progress * Math.max(dayCount - 1, 1);
         if (index - 1 <= visibleProgress) {
           ctx.lineTo(x, y);
         }
@@ -318,7 +353,7 @@ function startCanvasAnimation() {
 
     ctx.stroke();
 
-    const cursorProgress = progress * (dayCount - 1);
+    const cursorProgress = progress * Math.max(dayCount - 1, 1);
     const baseIndex = Math.floor(cursorProgress);
     const fractional = cursorProgress - baseIndex;
 
@@ -355,10 +390,21 @@ function startCanvasAnimation() {
     ctx.font = '14px Inter, sans-serif';
     ctx.fillText(`Day ${current.day} – ${current.name}`, padding, padding - 8);
 
-    requestAnimationFrame(drawFrame);
+    canvasAnimationId = requestAnimationFrame(drawFrame);
   }
 
-  requestAnimationFrame(drawFrame);
+  canvasResizeHandler = () => {
+    if (canvasAnimationId) {
+      cancelAnimationFrame(canvasAnimationId);
+    }
+    configureDimensions();
+    start = null;
+    canvasAnimationId = requestAnimationFrame(drawFrame);
+  };
+
+  configureDimensions();
+  canvasAnimationId = requestAnimationFrame(drawFrame);
+  window.addEventListener('resize', canvasResizeHandler, { passive: true });
 }
 
 function parseTimeToSeconds(timeString) {
