@@ -3,10 +3,10 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Ball Crusher – Mobile Daily Stats</title>
+    <title>Ball Crusher – Daily Mobile Stats</title>
     <meta
       name="description"
-      content="Mobile-first Ball Crusher event dashboard with daily winners, player leaderboards, and trends optimised for phones."
+      content="Follow Ball Crusher daily results with a mobile-first experience that showcases winners, full leaderboards, and player trends."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -17,83 +17,83 @@
     <link rel="stylesheet" href="assets/css/styles.css" />
   </head>
   <body>
-    <header class="page-header">
-      <div class="top-bar container">
-        <span class="brand">Ball Crusher</span>
-        <span class="tagline">Daily mobile stats</span>
-      </div>
-      <div class="container hero">
-        <div class="hero-copy">
-          <h1>Built for phones. Ready every day.</h1>
-          <p>
-            Track the latest Ball Crusher results with a layout crafted for
-            small screens. Swipe through daily winners, open full leaderboards,
-            and search any player with instant rankings.
-          </p>
+    <div class="page">
+      <header class="hero" role="banner">
+        <div class="hero__container">
+          <div class="hero__content">
+            <p class="hero__eyebrow">Ball Crusher Daily Recap</p>
+            <h1 class="hero__title">Designed purely for your phone.</h1>
+            <p class="hero__description">
+              Monitor daily winners, dive into complete leaderboards, and study player trajectories with an interface engineered to feel native on handheld screens.
+            </p>
+          </div>
+          <figure class="hero__visual">
+            <canvas
+              id="statsCanvas"
+              width="480"
+              height="320"
+              aria-label="Animated winner timeline"
+            ></canvas>
+            <figcaption class="hero__hint">Live winner timeline</figcaption>
+          </figure>
         </div>
-        <div class="canvas-wrapper">
-          <canvas
-            id="statsCanvas"
-            width="420"
-            height="220"
-            aria-label="Animated winner timeline"
-          ></canvas>
-        </div>
-      </div>
-    </header>
-    <main class="container">
-      <section id="open-stats" aria-labelledby="open-stats-title">
-        <div class="section-title">
-          <h2 id="open-stats-title">Open Stats</h2>
-          <span class="day-label">Daily winners and rankings</span>
-        </div>
-        <div id="open-stats-grid" class="card-grid" role="list"></div>
-      </section>
+      </header>
 
-      <section id="player-stats" aria-labelledby="player-stats-title">
-        <div class="section-title">
-          <h2 id="player-stats-title">Player Stats</h2>
-          <span class="day-label">Search for a player</span>
-        </div>
-        <div class="search-panel">
-          <div class="search-controls">
-            <label for="player-search">
-              Player name
-              <input
-                type="search"
-                id="player-search"
-                name="player-search"
-                placeholder="e.g. player1"
-                autocomplete="off"
-                list="player-suggestions"
-              />
-              <datalist id="player-suggestions"></datalist>
-            </label>
-            <label for="sort-field">
-              Sort by
-              <select id="sort-field" name="sort-field">
-                <option value="day">Day</option>
-                <option value="rank">Rank</option>
-                <option value="time">Time</option>
-              </select>
-            </label>
-            <label for="sort-order">
-              Order
-              <select id="sort-order" name="sort-order">
-                <option value="asc">Ascending</option>
-                <option value="desc">Descending</option>
-              </select>
-            </label>
+      <main class="main" id="content">
+        <section id="open-stats" class="panel" aria-labelledby="open-stats-title">
+          <div class="panel__header">
+            <h2 id="open-stats-title" class="panel__title">Open Stats</h2>
+            <span class="panel__subtitle">Tap any day for the full leaderboard</span>
           </div>
-          <div id="player-results" class="player-results" aria-live="polite">
-            <p class="no-results">Search for a player to see results.</p>
+          <div id="open-stats-grid" class="card-grid" role="list"></div>
+        </section>
+
+        <section id="player-stats" class="panel" aria-labelledby="player-stats-title">
+          <div class="panel__header">
+            <h2 id="player-stats-title" class="panel__title">Player Stats</h2>
+            <span class="panel__subtitle">Search to track an athlete across days</span>
           </div>
-        </div>
-      </section>
-    </main>
-    <footer>
-      Data updates daily. Keep the <code>day_stats.json</code> file in sync on GitHub.
-    </footer>
+          <div class="search-panel">
+            <div class="search-controls">
+              <label for="player-search">
+                Player name
+                <input
+                  type="search"
+                  id="player-search"
+                  name="player-search"
+                  placeholder="e.g. player1"
+                  autocomplete="off"
+                  list="player-suggestions"
+                />
+                <datalist id="player-suggestions"></datalist>
+              </label>
+              <label for="sort-field">
+                Sort by
+                <select id="sort-field" name="sort-field">
+                  <option value="day">Day</option>
+                  <option value="rank">Rank</option>
+                  <option value="time">Time</option>
+                </select>
+              </label>
+              <label for="sort-order">
+                Order
+                <select id="sort-order" name="sort-order">
+                  <option value="asc">Ascending</option>
+                  <option value="desc">Descending</option>
+                </select>
+              </label>
+            </div>
+            <div id="player-results" class="player-results" aria-live="polite">
+              <p class="no-results">Search for a player to see results.</p>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer class="page__footer">
+        Data refreshes daily. Keep <code>day_stats.json</code> in sync on GitHub to surface the latest runs.
+      </footer>
+    </div>
 
     <script src="assets/js/app.js" type="module"></script>
   </body>
