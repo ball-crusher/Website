@@ -18,7 +18,7 @@
   </head>
   <body>
     <div class="page">
-      <header class="hero" role="banner">
+      <header class="hero" id="page-hero" role="banner">
         <div class="hero__container">
           <div class="hero__content">
             <p class="hero__eyebrow">Ball Crusher Daily Recap</p>
@@ -40,6 +40,12 @@
       </header>
 
       <main class="main" id="content">
+        <nav class="quick-nav" aria-label="Quick navigation">
+          <button type="button" class="quick-nav__item" data-target="#page-hero">Top</button>
+          <button type="button" class="quick-nav__item" data-target="#open-stats">Open Stats</button>
+          <button type="button" class="quick-nav__item" data-target="#player-stats">Player Stats</button>
+        </nav>
+
         <section id="open-stats" class="panel" aria-labelledby="open-stats-title">
           <div class="panel__header">
             <h2 id="open-stats-title" class="panel__title">Open Stats</h2>

@@ -1,7 +1,46 @@
 :root {
-  --scale: 1;
+  --font-scale: 1;
   --base-font-size: 16px;
   --layout-max-width: 520px;
+  --viewport-width: 100vw;
+  --viewport-height: 100vh;
+  --vh: 1vh;
+  --vw: 1vw;
+  --space-unit: 16px;
+  --space-xxs: calc(var(--space-unit) * 0.4);
+  --space-xs: calc(var(--space-unit) * 0.6);
+  --space-sm: calc(var(--space-unit) * 0.8);
+  --space-md: calc(var(--space-unit) * 1);
+  --space-lg: calc(var(--space-unit) * 1.4);
+  --space-xl: calc(var(--space-unit) * 2);
+  --space-xxl: calc(var(--space-unit) * 2.6);
+  --page-horizontal-padding: var(--space-md);
+  --hero-padding-top: calc(var(--space-unit) * 3.25);
+  --hero-padding-bottom: calc(var(--space-unit) * 2.5);
+  --hero-gap: calc(var(--space-unit) * 1.5);
+  --hero-visual-padding: calc(var(--space-unit) * 1.1);
+  --main-gap: calc(var(--space-unit) * 1.8);
+  --main-padding-bottom: calc(var(--space-unit) * 2.6);
+  --panel-padding-y: calc(var(--space-unit) * 1.2);
+  --panel-padding-x: calc(var(--space-unit) * 1);
+  --panel-header-gap: calc(var(--space-unit) * 0.7);
+  --card-gap: calc(var(--space-unit) * 0.9);
+  --card-padding-y: calc(var(--space-unit) * 1);
+  --card-padding-x: calc(var(--space-unit) * 0.95);
+  --card-content-gap: calc(var(--space-unit) * 0.75);
+  --player-list-gap: calc(var(--space-unit) * 0.7);
+  --player-list-padding-y: calc(var(--space-unit) * 0.85);
+  --player-list-padding-x: calc(var(--space-unit) * 0.95);
+  --search-panel-padding-y: calc(var(--space-unit) * 0.9);
+  --search-panel-padding-x: calc(var(--space-unit) * 0.8);
+  --search-controls-gap: calc(var(--space-unit) * 0.7);
+  --player-results-gap: calc(var(--space-unit) * 0.75);
+  --player-result-padding-y: calc(var(--space-unit) * 0.9);
+  --player-result-padding-x: calc(var(--space-unit) * 0.95);
+  --quick-nav-gap: calc(var(--space-unit) * 0.4);
+  --quick-nav-padding: calc(var(--space-unit) * 0.4);
+  --quick-nav-offset: calc(env(safe-area-inset-top, 0px) + var(--space-unit) * 0.5);
+  --quick-nav-height: 60px;
   --bg: #030712;
   --bg-gradient: radial-gradient(circle at 20% -10%, rgba(13, 148, 136, 0.25), transparent 55%),
     radial-gradient(circle at 90% 10%, rgba(14, 165, 233, 0.18), transparent 50%),
@@ -23,7 +62,7 @@
 }
 
 html {
-  font-size: calc(var(--base-font-size) * var(--scale));
+  font-size: calc(var(--base-font-size) * var(--font-scale));
 }
 
 * {
@@ -63,7 +102,7 @@ a:focus {
 
 .hero {
   position: relative;
-  padding: 3.25rem 1.6rem 2.5rem;
+  padding: var(--hero-padding-top) var(--page-horizontal-padding) var(--hero-padding-bottom);
   overflow: hidden;
 }
 
@@ -78,12 +117,12 @@ a:focus {
 .hero__container {
   position: relative;
   display: grid;
-  gap: 2.4rem;
+  gap: var(--hero-gap);
 }
 
 .hero__content {
   display: grid;
-  gap: 0.9rem;
+  gap: calc(var(--space-unit) * 0.9);
 }
 
 .hero__eyebrow {
@@ -110,13 +149,13 @@ a:focus {
 
 .hero__visual {
   margin: 0;
-  padding: 1.2rem;
+  padding: var(--hero-visual-padding);
   border-radius: var(--radius-lg);
   border: 1px solid rgba(56, 189, 248, 0.25);
   background: var(--surface);
   box-shadow: var(--shadow-soft);
   display: grid;
-  gap: 0.85rem;
+  gap: calc(var(--space-unit) * 0.85);
 }
 
 .hero__visual canvas {
@@ -141,14 +180,71 @@ a:focus {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 2.3rem;
-  padding: 0 1.6rem 3.5rem;
+  gap: var(--main-gap);
+  padding: 0 var(--page-horizontal-padding) var(--main-padding-bottom);
+}
+
+.quick-nav {
+  position: sticky;
+  top: var(--quick-nav-offset);
+  align-self: center;
+  width: 100%;
+  max-width: min(100%, var(--layout-max-width));
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+  gap: var(--quick-nav-gap);
+  padding: var(--quick-nav-padding);
+  margin: 0 0 calc(var(--space-unit) * 0.9);
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(6, 12, 26, 0.82);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 18px 36px rgba(3, 7, 18, 0.45);
+  z-index: 20;
+}
+
+.quick-nav__item {
+  appearance: none;
+  border: 0;
+  border-radius: calc(var(--radius-sm) * 1.1);
+  padding: calc(var(--space-unit) * 0.55) calc(var(--space-unit) * 0.95);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: clamp(0.72rem, 0.68rem + 0.4vw, 0.92rem);
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(var(--space-unit) * 0.35);
+  cursor: pointer;
+  transition: color 160ms ease, background 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+  min-height: calc(var(--quick-nav-height) * 0.55);
+}
+
+.quick-nav__item:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.3);
+  color: var(--text-primary);
+}
+
+.quick-nav__item:hover {
+  color: var(--text-primary);
+  background: rgba(56, 189, 248, 0.12);
+}
+
+.quick-nav__item--active {
+  color: var(--text-primary);
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.36), rgba(14, 165, 233, 0.14));
+  box-shadow: 0 14px 24px rgba(14, 165, 233, 0.32);
+  transform: translateY(-1px);
 }
 
 .panel {
   background: var(--surface-alt);
   border-radius: var(--radius-lg);
-  padding: 1.8rem 1.6rem 1.8rem;
+  padding: var(--panel-padding-y) var(--panel-padding-x);
   border: 1px solid var(--border);
   box-shadow: 0 18px 35px rgba(8, 15, 40, 0.42);
   backdrop-filter: blur(18px);
@@ -156,8 +252,8 @@ a:focus {
 
 .panel__header {
   display: grid;
-  gap: 0.55rem;
-  margin-bottom: 1.6rem;
+  gap: var(--panel-header-gap);
+  margin-bottom: calc(var(--space-unit) * 1.1);
 }
 
 .panel__title {
@@ -175,16 +271,16 @@ a:focus {
 
 .card-grid {
   display: grid;
-  gap: 1.1rem;
+  gap: var(--card-gap);
 }
 
 .day-card {
   background: rgba(15, 23, 42, 0.85);
   border-radius: var(--radius-md);
   border: 1px solid rgba(148, 163, 184, 0.22);
-  padding: 1.2rem 1.1rem;
+  padding: var(--card-padding-y) var(--card-padding-x);
   display: grid;
-  gap: 1rem;
+  gap: var(--card-content-gap);
   position: relative;
   overflow: hidden;
   transition: border-color 160ms ease, transform 160ms ease;
@@ -218,7 +314,7 @@ a:focus {
 
 .day-card-content {
   display: grid;
-  gap: 0.85rem;
+  gap: calc(var(--space-unit) * 0.85);
 }
 
 .day-label {
@@ -230,7 +326,7 @@ a:focus {
 
 .winner {
   display: grid;
-  gap: 0.35rem;
+  gap: calc(var(--space-unit) * 0.35);
   font-size: clamp(1.1rem, 1.02rem + 0.6vw, 1.32rem);
   font-weight: 600;
 }
@@ -253,7 +349,7 @@ a:focus {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 0.45rem;
+  gap: calc(var(--space-unit) * 0.45);
   cursor: pointer;
   transition: transform 160ms ease, background 160ms ease;
   width: 100%;
@@ -295,15 +391,15 @@ a:focus {
   margin: 0;
   padding: 0;
   display: grid;
-  gap: 0.7rem;
+  gap: var(--player-list-gap);
 }
 
 .player-list li {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.85rem 0.95rem;
+  gap: var(--player-list-gap);
+  padding: var(--player-list-padding-y) var(--player-list-padding-x);
   border-radius: var(--radius-sm);
   background: rgba(2, 6, 23, 0.6);
   border: 1px solid rgba(148, 163, 184, 0.18);
@@ -313,7 +409,7 @@ a:focus {
 .player-name {
   display: flex;
   align-items: center;
-  gap: 0.55rem;
+  gap: calc(var(--space-unit) * 0.55);
   font-weight: 500;
 }
 
@@ -329,21 +425,21 @@ a:focus {
 
 .search-panel {
   display: grid;
-  gap: 1.4rem;
+  gap: calc(var(--space-unit) * 1.35);
   background: rgba(15, 23, 42, 0.82);
-  padding: 1.4rem 1.2rem;
+  padding: var(--search-panel-padding-y) var(--search-panel-padding-x);
   border-radius: var(--radius-md);
   border: 1px solid rgba(148, 163, 184, 0.2);
 }
 
 .search-controls {
   display: grid;
-  gap: 1rem;
+  gap: var(--search-controls-gap);
 }
 
 .search-controls label {
   display: grid;
-  gap: 0.5rem;
+  gap: calc(var(--space-unit) * 0.5);
   font-size: clamp(0.76rem, 0.72rem + 0.25vw, 0.88rem);
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -371,13 +467,13 @@ a:focus {
 
 .player-results {
   display: grid;
-  gap: 1rem;
+  gap: var(--player-results-gap);
 }
 
 .player-result-card {
   display: grid;
-  gap: 0.85rem;
-  padding: 1.1rem 1.15rem;
+  gap: calc(var(--space-unit) * 0.85);
+  padding: var(--player-result-padding-y) var(--player-result-padding-x);
   border-radius: var(--radius-md);
   border: 1px solid rgba(148, 163, 184, 0.18);
   background: rgba(2, 6, 23, 0.7);
@@ -385,7 +481,7 @@ a:focus {
 
 .player-result-card .meta {
   display: grid;
-  gap: 0.4rem;
+  gap: calc(var(--space-unit) * 0.4);
 }
 
 .player-result-card strong {
@@ -396,8 +492,8 @@ a:focus {
 .badge {
   display: inline-flex;
   align-items: center;
-  gap: 0.45rem;
-  padding: 0.35rem 0.75rem;
+  gap: calc(var(--space-unit) * 0.45);
+  padding: calc(var(--space-unit) * 0.35) calc(var(--space-unit) * 0.75);
   border-radius: 999px;
   font-size: clamp(0.8rem, 0.76rem + 0.3vw, 0.92rem);
   font-weight: 600;

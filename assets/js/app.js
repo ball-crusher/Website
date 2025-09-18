@@ -8,44 +8,363 @@ const playerSuggestions = document.getElementById('player-suggestions');
 const sortFieldSelect = document.getElementById('sort-field');
 const sortOrderSelect = document.getElementById('sort-order');
 const canvas = document.getElementById('statsCanvas');
+const quickNav = document.querySelector('.quick-nav');
+const quickNavButtons = quickNav
+  ? Array.from(quickNav.querySelectorAll('.quick-nav__item[data-target]'))
+  : [];
 
 let playerIndex = new Map();
 let currentPlayer = null;
 let winnerTimeline = [];
 let canvasAnimationId = null;
 let canvasResizeHandler = null;
+let quickNavTargets = [];
+let quickNavObserver = null;
+let quickNavScrollRaf = null;
+let metricsFrameId = null;
+let pendingCanvasResize = false;
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
+function getViewportRect() {
+  const visual = window.visualViewport;
+  if (visual) {
+    return {
+      width: visual.width,
+      height: visual.height,
+      offsetTop: visual.offsetTop || 0,
+    };
+  }
+
+  return {
+    width:
+      window.innerWidth ||
+      document.documentElement.clientWidth ||
+      document.body?.clientWidth ||
+      0,
+    height:
+      window.innerHeight ||
+      document.documentElement.clientHeight ||
+      document.body?.clientHeight ||
+      0,
+    offsetTop: 0,
+  };
+}
+
+function scheduleMetricsUpdate() {
+  if (metricsFrameId !== null) {
+    return;
+  }
+
+  metricsFrameId = requestAnimationFrame(() => {
+    metricsFrameId = null;
+    applyMobileMetrics();
+  });
+}
+
 function applyMobileMetrics() {
-  const width = Math.max(window.innerWidth || document.documentElement.clientWidth || 0, 320);
-  const height = Math.max(window.innerHeight || document.documentElement.clientHeight || 0, 540);
+  const viewport = getViewportRect();
+  const width = clamp(viewport.width, 280, 1024);
+  const height = clamp(viewport.height, 480, 1500);
+  const orientation = width >= height ? 'landscape' : 'portrait';
   const baseWidth = 390;
   const baseHeight = 844;
+  const baseDiagonal = Math.hypot(baseWidth, baseHeight);
+  const diagonal = Math.hypot(width, height);
   const widthScale = width / baseWidth;
   const heightScale = height / baseHeight;
-  const blendScale = widthScale * 0.65 + heightScale * 0.35;
-  const scale = clamp(blendScale, 0.85, 1.2);
-  const layoutWidth = clamp(width * 0.94, 320, 620);
+  const diagonalScale = diagonal / baseDiagonal;
+  const densityAdjustment = clamp(1 / (window.devicePixelRatio || 1), 0.7, 1);
+  const blendedScale = widthScale * 0.45 + heightScale * 0.35 + diagonalScale * 0.2;
+  const scale = clamp(blendedScale * densityAdjustment, 0.75, 1.35);
+  const fontScale = clamp(scale * (orientation === 'portrait' ? 1 : 0.93), 0.82, 1.24);
+  const spaceUnit = clamp(16 * scale, 12, orientation === 'portrait' ? 28 : 24);
+  const layoutWidth = clamp(
+    width * (orientation === 'portrait' ? 0.94 : 0.9),
+    orientation === 'portrait' ? 320 : 360,
+    orientation === 'portrait' ? 760 : 820,
+  );
+  const heroPaddingTop = clamp(spaceUnit * (orientation === 'portrait' ? 3.3 : 2.4), 48, 150);
+  const heroPaddingBottom = clamp(spaceUnit * (orientation === 'portrait' ? 2.4 : 1.9), 40, 110);
+  const heroGap = clamp(spaceUnit * (orientation === 'portrait' ? 1.55 : 1.2), 18, 48);
+  const heroVisualPadding = clamp(spaceUnit * (orientation === 'portrait' ? 1.1 : 0.95), 16, 36);
+  const mainGap = clamp(spaceUnit * (orientation === 'portrait' ? 1.8 : 1.4), 18, 48);
+  const mainPaddingBottom = clamp(spaceUnit * (orientation === 'portrait' ? 2.6 : 2.1), 32, 96);
+  const panelPaddingY = clamp(spaceUnit * (orientation === 'portrait' ? 1.25 : 1.05), 18, 44);
+  const panelPaddingX = clamp(spaceUnit * (orientation === 'portrait' ? 1.1 : 0.95), 16, 38);
+  const panelHeaderGap = clamp(spaceUnit * 0.7, 10, 28);
+  const cardGap = clamp(spaceUnit * 0.9, 12, 30);
+  const cardPaddingY = clamp(spaceUnit * 1.05, 14, 34);
+  const cardPaddingX = clamp(spaceUnit * 1, 12, 32);
+  const cardContentGap = clamp(spaceUnit * 0.75, 10, 24);
+  const listGap = clamp(spaceUnit * 0.7, 10, 24);
+  const listPaddingY = clamp(spaceUnit * 0.88, 12, 28);
+  const listPaddingX = clamp(spaceUnit * 0.98, 14, 32);
+  const searchPanelPaddingY = clamp(spaceUnit * 1, 14, 36);
+  const searchPanelPaddingX = clamp(spaceUnit * 0.9, 12, 32);
+  const searchControlsGap = clamp(spaceUnit * 0.75, 10, 26);
+  const playerResultsGap = clamp(spaceUnit * 0.78, 10, 28);
+  const playerResultPaddingY = clamp(spaceUnit * 0.95, 14, 32);
+  const playerResultPaddingX = clamp(spaceUnit * 1.05, 16, 36);
+  const quickNavGap = clamp(spaceUnit * 0.42, 8, 20);
+  const quickNavPadding = clamp(spaceUnit * 0.38, 6, 18);
+  const quickNavHeight = clamp(spaceUnit * 1.9, 46, 78);
+  const radiusLg = clamp(spaceUnit * 1.75, 22, 46);
+  const radiusMd = clamp(radiusLg * 0.65, 14, 30);
+  const radiusSm = clamp(radiusMd * 0.62, 10, 24);
+  const viewportHeight = Math.max(
+    height + (viewport.offsetTop || 0),
+    window.innerHeight || 0,
+    document.documentElement?.clientHeight || height,
+  );
+  const quickNavOffset = clamp(
+    (viewport.offsetTop || 0) + spaceUnit * (orientation === 'portrait' ? 0.6 : 0.45),
+    12,
+    110,
+  );
 
-  root.style.setProperty('--scale', scale.toFixed(4));
-  root.style.setProperty('--layout-max-width', `${layoutWidth}px`);
-  root.style.setProperty('--viewport-width', `${width}px`);
-  root.style.setProperty('--viewport-height', `${height}px`);
-  root.style.setProperty('--vh', `${height * 0.01}px`);
-  root.style.setProperty('--vw', `${width * 0.01}px`);
+  root.style.setProperty('--font-scale', fontScale.toFixed(4));
+  root.style.setProperty('--space-unit', `${spaceUnit.toFixed(2)}px`);
+  root.style.setProperty('--page-horizontal-padding', `${clamp(spaceUnit * 1, 14, 36).toFixed(2)}px`);
+  root.style.setProperty('--hero-padding-top', `${heroPaddingTop.toFixed(2)}px`);
+  root.style.setProperty('--hero-padding-bottom', `${heroPaddingBottom.toFixed(2)}px`);
+  root.style.setProperty('--hero-gap', `${heroGap.toFixed(2)}px`);
+  root.style.setProperty('--hero-visual-padding', `${heroVisualPadding.toFixed(2)}px`);
+  root.style.setProperty('--main-gap', `${mainGap.toFixed(2)}px`);
+  root.style.setProperty('--main-padding-bottom', `${mainPaddingBottom.toFixed(2)}px`);
+  root.style.setProperty('--panel-padding-y', `${panelPaddingY.toFixed(2)}px`);
+  root.style.setProperty('--panel-padding-x', `${panelPaddingX.toFixed(2)}px`);
+  root.style.setProperty('--panel-header-gap', `${panelHeaderGap.toFixed(2)}px`);
+  root.style.setProperty('--card-gap', `${cardGap.toFixed(2)}px`);
+  root.style.setProperty('--card-padding-y', `${cardPaddingY.toFixed(2)}px`);
+  root.style.setProperty('--card-padding-x', `${cardPaddingX.toFixed(2)}px`);
+  root.style.setProperty('--card-content-gap', `${cardContentGap.toFixed(2)}px`);
+  root.style.setProperty('--player-list-gap', `${listGap.toFixed(2)}px`);
+  root.style.setProperty('--player-list-padding-y', `${listPaddingY.toFixed(2)}px`);
+  root.style.setProperty('--player-list-padding-x', `${listPaddingX.toFixed(2)}px`);
+  root.style.setProperty('--search-panel-padding-y', `${searchPanelPaddingY.toFixed(2)}px`);
+  root.style.setProperty('--search-panel-padding-x', `${searchPanelPaddingX.toFixed(2)}px`);
+  root.style.setProperty('--search-controls-gap', `${searchControlsGap.toFixed(2)}px`);
+  root.style.setProperty('--player-results-gap', `${playerResultsGap.toFixed(2)}px`);
+  root.style.setProperty('--player-result-padding-y', `${playerResultPaddingY.toFixed(2)}px`);
+  root.style.setProperty('--player-result-padding-x', `${playerResultPaddingX.toFixed(2)}px`);
+  root.style.setProperty('--quick-nav-gap', `${quickNavGap.toFixed(2)}px`);
+  root.style.setProperty('--quick-nav-padding', `${quickNavPadding.toFixed(2)}px`);
+  root.style.setProperty('--quick-nav-height', `${quickNavHeight.toFixed(2)}px`);
+  root.style.setProperty('--quick-nav-offset', `${quickNavOffset.toFixed(2)}px`);
+  root.style.setProperty('--radius-lg', `${radiusLg.toFixed(2)}px`);
+  root.style.setProperty('--radius-md', `${radiusMd.toFixed(2)}px`);
+  root.style.setProperty('--radius-sm', `${radiusSm.toFixed(2)}px`);
+  root.style.setProperty('--layout-max-width', `${layoutWidth.toFixed(2)}px`);
+  root.style.setProperty('--viewport-width', `${width.toFixed(2)}px`);
+  root.style.setProperty('--viewport-height', `${viewportHeight.toFixed(2)}px`);
+  root.style.setProperty('--vh', `${(viewportHeight * 0.01).toFixed(4)}px`);
+  root.style.setProperty('--vw', `${(width * 0.01).toFixed(4)}px`);
+
+  root.dataset.orientation = orientation;
+
+  if (quickNavTargets.length) {
+    refreshQuickNavObserver();
+  }
+
+  scheduleCanvasRefresh();
 }
 
 applyMobileMetrics();
-window.addEventListener('resize', applyMobileMetrics, { passive: true });
+
+window.addEventListener('resize', scheduleMetricsUpdate, { passive: true });
+
 window.addEventListener('orientationchange', () => {
-  applyMobileMetrics();
-  if (typeof canvasResizeHandler === 'function') {
-    requestAnimationFrame(() => canvasResizeHandler());
-  }
+  scheduleMetricsUpdate();
 });
+
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', scheduleMetricsUpdate, { passive: true });
+  window.visualViewport.addEventListener('scroll', scheduleMetricsUpdate, { passive: true });
+}
+
+function scheduleCanvasRefresh() {
+  if (typeof canvasResizeHandler !== 'function' || pendingCanvasResize) {
+    return;
+  }
+
+  pendingCanvasResize = true;
+  requestAnimationFrame(() => {
+    pendingCanvasResize = false;
+    canvasResizeHandler();
+  });
+}
+
+function refreshQuickNavObserver() {
+  if (!quickNav || !quickNavButtons.length || !quickNavTargets.length) {
+    return;
+  }
+
+  if (quickNavObserver) {
+    quickNavObserver.disconnect();
+  }
+
+  const styles = getComputedStyle(root);
+  const quickNavHeightValue =
+    parseFloat(styles.getPropertyValue('--quick-nav-height')) ||
+    quickNav.offsetHeight ||
+    60;
+  const spaceUnitValue = parseFloat(styles.getPropertyValue('--space-unit')) || 16;
+  const topMargin = -(quickNavHeightValue + spaceUnitValue * 1.6);
+  const bottomMargin = -(spaceUnitValue * 6);
+
+  quickNavObserver = new IntersectionObserver(
+    (entries) => {
+      const visible = entries
+        .filter((entry) => entry.isIntersecting)
+        .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
+
+      if (visible.length) {
+        const selector = `#${visible[0].target.id}`;
+        setQuickNavActive(selector);
+      }
+    },
+    {
+      threshold: [0.35, 0.6, 0.85],
+      rootMargin: `${topMargin}px 0px ${bottomMargin}px 0px`,
+    },
+  );
+
+  quickNavTargets.forEach(({ target }) => quickNavObserver.observe(target));
+}
+
+function setQuickNavActive(selector) {
+  if (!selector) {
+    return;
+  }
+
+  quickNavButtons.forEach((button) => {
+    const isActive = button.dataset.target === selector;
+    button.classList.toggle('quick-nav__item--active', isActive);
+    if (isActive) {
+      button.setAttribute('aria-current', 'true');
+    } else {
+      button.removeAttribute('aria-current');
+    }
+  });
+}
+
+function scrollSectionIntoView(target) {
+  if (!target) {
+    return;
+  }
+
+  const styles = getComputedStyle(root);
+  const quickNavHeightValue =
+    parseFloat(styles.getPropertyValue('--quick-nav-height')) ||
+    quickNav?.offsetHeight ||
+    60;
+  const spaceUnitValue = parseFloat(styles.getPropertyValue('--space-unit')) || 16;
+  const safeTop = parseFloat(getComputedStyle(document.body).paddingTop) || 0;
+  const rect = target.getBoundingClientRect();
+  const scrollTop = window.pageYOffset || document.documentElement.scrollTop || 0;
+  const offset = Math.max(rect.top + scrollTop - quickNavHeightValue - spaceUnitValue - safeTop, 0);
+
+  window.scrollTo({
+    top: offset,
+    behavior: 'smooth',
+  });
+}
+
+function handleQuickNavScroll() {
+  if (!quickNavTargets.length) {
+    return;
+  }
+
+  if (quickNavScrollRaf !== null) {
+    return;
+  }
+
+  quickNavScrollRaf = requestAnimationFrame(() => {
+    quickNavScrollRaf = null;
+    const scrollTop = window.pageYOffset || document.documentElement.scrollTop || 0;
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+    const documentHeight =
+      document.documentElement.scrollHeight || document.body.scrollHeight || 0;
+
+    if (scrollTop + viewportHeight >= documentHeight - 2) {
+      const last = quickNavTargets[quickNavTargets.length - 1];
+      if (last) {
+        setQuickNavActive(last.selector);
+      }
+      return;
+    }
+
+    if (scrollTop <= 2) {
+      const first = quickNavTargets[0];
+      if (first) {
+        setQuickNavActive(first.selector);
+      }
+    }
+  });
+}
+
+function setupQuickNavigation() {
+  if (!quickNav || !quickNavButtons.length) {
+    return;
+  }
+
+  quickNavTargets = quickNavButtons
+    .map((button) => {
+      const selector = button.dataset.target;
+      if (!selector) {
+        button.disabled = true;
+        return null;
+      }
+
+      const target = document.querySelector(selector);
+      if (!target) {
+        button.disabled = true;
+        button.classList.remove('quick-nav__item--active');
+        return null;
+      }
+
+      button.disabled = false;
+      return { button, target, selector };
+    })
+    .filter(Boolean);
+
+  if (!quickNavTargets.length) {
+    quickNav.hidden = true;
+    return;
+  }
+
+  quickNav.hidden = false;
+
+  if (!quickNav.dataset.initialized) {
+    quickNav.addEventListener('click', (event) => {
+      const trigger = event.target.closest('.quick-nav__item[data-target]');
+      if (!trigger) {
+        return;
+      }
+
+      const entry = quickNavTargets.find((item) => item.button === trigger);
+      if (!entry) {
+        return;
+      }
+
+      event.preventDefault();
+      setQuickNavActive(entry.selector);
+      scrollSectionIntoView(entry.target);
+    });
+
+    window.addEventListener('scroll', handleQuickNavScroll, { passive: true });
+    quickNav.dataset.initialized = 'true';
+  }
+
+  setQuickNavActive(quickNavTargets[0].selector);
+  refreshQuickNavObserver();
+  handleQuickNavScroll();
+}
+
+setupQuickNavigation();
 
 async function loadStats() {
   try {
@@ -314,9 +633,10 @@ function startCanvasAnimation() {
   }
 
   if (canvasResizeHandler) {
-    window.removeEventListener('resize', canvasResizeHandler);
+    window.removeEventListener('resize', scheduleCanvasRefresh);
     canvasResizeHandler = null;
   }
+  pendingCanvasResize = false;
 
   if (!canvas || !canvas.getContext || !winnerTimeline.length) {
     return;
@@ -461,7 +781,7 @@ function startCanvasAnimation() {
 
   configureDimensions();
   canvasAnimationId = requestAnimationFrame(drawFrame);
-  window.addEventListener('resize', canvasResizeHandler, { passive: true });
+  window.addEventListener('resize', scheduleCanvasRefresh, { passive: true });
 }
 
 function parseTimeToSeconds(timeString) {
