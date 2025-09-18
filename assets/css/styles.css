@@ -13,10 +13,22 @@
   --text-secondary: #cbd5f5;
   --text-muted: #94a3b8;
   --shadow-soft: 0 28px 60px rgba(2, 6, 23, 0.55);
-  --radius-lg: 28px;
-  --radius-md: 18px;
-  --radius-sm: 12px;
   --font-family: 'Inter', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-scale: 1;
+  --spacing-scale: 1;
+  --radius-scale: 1;
+  --button-height: 52px;
+  --max-page-width: 520px;
+  --radius-lg-base: 28px;
+  --radius-md-base: 18px;
+  --radius-sm-base: 12px;
+  --radius-lg: calc(var(--radius-lg-base) * var(--radius-scale));
+  --radius-md: calc(var(--radius-md-base) * var(--radius-scale));
+  --radius-sm: calc(var(--radius-sm-base) * var(--radius-scale));
+}
+
+html {
+  font-size: calc(16px * var(--font-scale));
 }
 
 * {
@@ -34,7 +46,7 @@ body {
 
 .page {
   width: 100%;
-  max-width: 520px;
+  max-width: var(--max-page-width);
   margin: 0 auto;
   min-height: 100vh;
   display: flex;
@@ -53,7 +65,8 @@ a:focus {
 
 .hero {
   position: relative;
-  padding: 3.25rem 1.6rem 2.5rem;
+  padding: calc(3.25rem * var(--spacing-scale)) calc(1.6rem * var(--spacing-scale))
+    calc(2.5rem * var(--spacing-scale));
   overflow: hidden;
 }
 
@@ -98,9 +111,16 @@ a:focus {
   color: var(--text-secondary);
 }
 
+.hero__note {
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+
 .hero__visual {
   margin: 0;
-  padding: 1.2rem;
+  padding: calc(1.2rem * var(--spacing-scale));
   border-radius: var(--radius-lg);
   border: 1px solid rgba(56, 189, 248, 0.25);
   background: var(--surface);
@@ -130,14 +150,15 @@ a:focus {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 2.3rem;
-  padding: 0 1.6rem 3.5rem;
+  gap: calc(2.3rem * var(--spacing-scale));
+  padding: 0 calc(1.6rem * var(--spacing-scale)) calc(3.5rem * var(--spacing-scale));
 }
 
 .panel {
   background: var(--surface-alt);
   border-radius: var(--radius-lg);
-  padding: 1.8rem 1.6rem 1.8rem;
+  padding: calc(1.8rem * var(--spacing-scale)) calc(1.6rem * var(--spacing-scale))
+    calc(1.8rem * var(--spacing-scale));
   border: 1px solid var(--border);
   box-shadow: 0 18px 35px rgba(8, 15, 40, 0.42);
   backdrop-filter: blur(18px);
@@ -164,14 +185,14 @@ a:focus {
 
 .card-grid {
   display: grid;
-  gap: 1.1rem;
+  gap: calc(1.1rem * var(--spacing-scale));
 }
 
 .day-card {
   background: rgba(15, 23, 42, 0.85);
   border-radius: var(--radius-md);
   border: 1px solid rgba(148, 163, 184, 0.22);
-  padding: 1.2rem 1.1rem;
+  padding: calc(1.2rem * var(--spacing-scale)) calc(1.1rem * var(--spacing-scale));
   display: grid;
   gap: 1rem;
   position: relative;
@@ -235,17 +256,18 @@ a:focus {
   background: linear-gradient(135deg, rgba(14, 165, 233, 0.22), rgba(14, 165, 233, 0.08));
   color: var(--text-primary);
   border-radius: 999px;
-  padding: 0.65rem 1.1rem;
+  padding: calc(0.65rem * var(--spacing-scale)) calc(1.1rem * var(--spacing-scale));
   font-size: 0.95rem;
   font-weight: 600;
   letter-spacing: 0.04em;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 0.45rem;
+  gap: calc(0.45rem * var(--spacing-scale));
   cursor: pointer;
   transition: transform 160ms ease, background 160ms ease;
   width: 100%;
+  min-height: var(--button-height);
 }
 
 .details-button::after {
@@ -284,15 +306,15 @@ a:focus {
   margin: 0;
   padding: 0;
   display: grid;
-  gap: 0.7rem;
+  gap: calc(0.7rem * var(--spacing-scale));
 }
 
 .player-list li {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.85rem 0.95rem;
+  gap: calc(0.75rem * var(--spacing-scale));
+  padding: calc(0.85rem * var(--spacing-scale)) calc(0.95rem * var(--spacing-scale));
   border-radius: var(--radius-sm);
   background: rgba(2, 6, 23, 0.6);
   border: 1px solid rgba(148, 163, 184, 0.18);
@@ -318,16 +340,16 @@ a:focus {
 
 .search-panel {
   display: grid;
-  gap: 1.4rem;
+  gap: calc(1.4rem * var(--spacing-scale));
   background: rgba(15, 23, 42, 0.82);
-  padding: 1.4rem 1.2rem;
+  padding: calc(1.4rem * var(--spacing-scale)) calc(1.2rem * var(--spacing-scale));
   border-radius: var(--radius-md);
   border: 1px solid rgba(148, 163, 184, 0.2);
 }
 
 .search-controls {
   display: grid;
-  gap: 1rem;
+  gap: calc(1rem * var(--spacing-scale));
 }
 
 .search-controls label {
@@ -342,12 +364,13 @@ a:focus {
 .search-controls input,
 .search-controls select {
   width: 100%;
-  padding: 0.8rem 1rem;
+  padding: calc(0.8rem * var(--spacing-scale)) calc(1rem * var(--spacing-scale));
   border-radius: var(--radius-sm);
   border: 1px solid rgba(148, 163, 184, 0.28);
   background: rgba(2, 6, 23, 0.82);
   color: var(--text-primary);
   font-size: 1rem;
+  min-height: var(--button-height);
   transition: border-color 140ms ease, box-shadow 140ms ease;
 }
 
@@ -360,13 +383,13 @@ a:focus {
 
 .player-results {
   display: grid;
-  gap: 1rem;
+  gap: calc(1rem * var(--spacing-scale));
 }
 
 .player-result-card {
   display: grid;
-  gap: 0.85rem;
-  padding: 1.1rem 1.15rem;
+  gap: calc(0.85rem * var(--spacing-scale));
+  padding: calc(1.1rem * var(--spacing-scale)) calc(1.15rem * var(--spacing-scale));
   border-radius: var(--radius-md);
   border: 1px solid rgba(148, 163, 184, 0.18);
   background: rgba(2, 6, 23, 0.7);
@@ -374,7 +397,7 @@ a:focus {
 
 .player-result-card .meta {
   display: grid;
-  gap: 0.4rem;
+  gap: calc(0.4rem * var(--spacing-scale));
 }
 
 .player-result-card strong {
@@ -385,8 +408,8 @@ a:focus {
 .badge {
   display: inline-flex;
   align-items: center;
-  gap: 0.45rem;
-  padding: 0.35rem 0.75rem;
+  gap: calc(0.45rem * var(--spacing-scale));
+  padding: calc(0.35rem * var(--spacing-scale)) calc(0.75rem * var(--spacing-scale));
   border-radius: 999px;
   font-size: 0.85rem;
   font-weight: 600;
@@ -412,7 +435,8 @@ a:focus {
 }
 
 .page__footer {
-  padding: 2.5rem 1.6rem 3rem;
+  padding: calc(2.5rem * var(--spacing-scale)) calc(1.6rem * var(--spacing-scale))
+    calc(3rem * var(--spacing-scale));
   font-size: 0.85rem;
   color: var(--text-muted);
   text-align: center;
@@ -429,29 +453,34 @@ a:focus {
 
 @media (min-width: 560px) {
   .hero {
-    padding: 3.6rem 2.4rem 2.8rem;
+    padding: calc(3.6rem * var(--spacing-scale)) calc(2.4rem * var(--spacing-scale))
+      calc(2.8rem * var(--spacing-scale));
   }
 
   .main {
-    padding: 0 2.4rem 4rem;
+    padding: 0 calc(2.4rem * var(--spacing-scale)) calc(4rem * var(--spacing-scale));
   }
 
   .panel {
-    padding: 2rem 1.85rem 2.1rem;
+    padding: calc(2rem * var(--spacing-scale)) calc(1.85rem * var(--spacing-scale))
+      calc(2.1rem * var(--spacing-scale));
   }
 
   .search-panel {
-    padding: 1.6rem 1.45rem;
+    padding: calc(1.6rem * var(--spacing-scale)) calc(1.45rem * var(--spacing-scale));
   }
 }
 
 @media (min-width: 720px) {
-  .page {
-    max-width: 560px;
-  }
-
   .hero__container {
     gap: 2.8rem;
+  }
+}
+
+@media (min-width: 640px) {
+  .search-controls {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    column-gap: calc(1.2rem * var(--spacing-scale));
   }
 }
 
