@@ -19,46 +19,33 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
-function debounce(fn, delay = 120) {
-  let timer;
-  return (...args) => {
-    window.clearTimeout(timer);
-    timer = window.setTimeout(() => fn(...args), delay);
-  };
+function applyMobileMetrics() {
+  const width = Math.max(window.innerWidth || document.documentElement.clientWidth || 0, 320);
+  const height = Math.max(window.innerHeight || document.documentElement.clientHeight || 0, 540);
+  const baseWidth = 390;
+  const baseHeight = 844;
+  const widthScale = width / baseWidth;
+  const heightScale = height / baseHeight;
+  const blendScale = widthScale * 0.65 + heightScale * 0.35;
+  const scale = clamp(blendScale, 0.85, 1.2);
+  const layoutWidth = clamp(width * 0.94, 320, 620);
+
+  root.style.setProperty('--scale', scale.toFixed(4));
+  root.style.setProperty('--layout-max-width', `${layoutWidth}px`);
+  root.style.setProperty('--viewport-width', `${width}px`);
+  root.style.setProperty('--viewport-height', `${height}px`);
+  root.style.setProperty('--vh', `${height * 0.01}px`);
+  root.style.setProperty('--vw', `${width * 0.01}px`);
 }
 
-function updateResponsiveScale() {
-  const screenObj = window.screen || {};
-  const width = window.innerWidth || screenObj.width || 390;
-  const height = window.innerHeight || screenObj.height || 844;
-  const normalizedWidth = clamp(width, 320, 640);
-  const normalizedHeight = clamp(height, 568, 1180);
-  const widthScale = normalizedWidth / 390;
-  const heightScale = normalizedHeight / 844;
-
-  const fontScale = clamp(widthScale * 0.6 + heightScale * 0.4, 0.9, 1.2);
-  const spacingScale = clamp(widthScale, 0.9, 1.35);
-  const radiusScale = clamp(widthScale * 0.95, 0.85, 1.2);
-  const buttonHeight = clamp(height * 0.07, 44, 68);
-  const maxWidth = clamp(normalizedWidth * 0.94, 340, 560);
-
-  root.style.setProperty('--font-scale', fontScale.toFixed(3));
-  root.style.setProperty('--spacing-scale', spacingScale.toFixed(3));
-  root.style.setProperty('--radius-scale', radiusScale.toFixed(3));
-  root.style.setProperty('--button-height', `${buttonHeight.toFixed(2)}px`);
-  root.style.setProperty('--max-page-width', `${maxWidth.toFixed(2)}px`);
-}
-
-const updateScaleDebounced = debounce(() => {
-  updateResponsiveScale();
+applyMobileMetrics();
+window.addEventListener('resize', applyMobileMetrics, { passive: true });
+window.addEventListener('orientationchange', () => {
+  applyMobileMetrics();
   if (typeof canvasResizeHandler === 'function') {
-    canvasResizeHandler();
+    requestAnimationFrame(() => canvasResizeHandler());
   }
 });
-
-updateResponsiveScale();
-window.addEventListener('resize', updateScaleDebounced, { passive: true });
-window.addEventListener('orientationchange', updateScaleDebounced);
 
 async function loadStats() {
   try {
@@ -179,6 +166,25 @@ function renderOpenStats(days) {
       collapse.hidden = !isOpen;
       button.setAttribute('aria-expanded', String(isOpen));
       button.textContent = isOpen ? 'Hide details' : 'More details';
+
+      if (isOpen) {
+        document.querySelectorAll('.collapse.open').forEach((openSection) => {
+          if (openSection === collapse) return;
+          openSection.classList.remove('open');
+          openSection.hidden = true;
+          const toggle = openSection.previousElementSibling?.querySelector?.('.details-button');
+          if (toggle) {
+            toggle.setAttribute('aria-expanded', 'false');
+            toggle.textContent = 'More details';
+          }
+        });
+
+        if (typeof collapse.scrollIntoView === 'function') {
+          requestAnimationFrame(() => {
+            collapse.scrollIntoView({ block: 'start', behavior: 'smooth' });
+          });
+        }
+      }
     });
 
     card.append(header, collapse);
@@ -330,11 +336,14 @@ function startCanvasAnimation() {
 
   function configureDimensions() {
     const parentWidth = canvas.parentElement?.clientWidth || window.innerWidth || 360;
-    const computedMax = parseFloat(getComputedStyle(root).getPropertyValue('--max-page-width')) || parentWidth;
-    const cssWidth = Math.min(parentWidth, computedMax);
-    const heightGuess = Math.round(cssWidth * 0.68);
-    const cssHeight = clamp(heightGuess, 200, Math.max(240, Math.round((window.innerHeight || 640) * 0.46)));
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const styles = getComputedStyle(root);
+    const layoutMax = parseFloat(styles.getPropertyValue('--layout-max-width')) || parentWidth;
+    const viewportWidth = parseFloat(styles.getPropertyValue('--viewport-width')) || parentWidth;
+    const viewportHeight = parseFloat(styles.getPropertyValue('--viewport-height')) || window.innerHeight || 640;
+    const maxWidth = Math.min(layoutMax, viewportWidth * 0.96);
+    const cssWidth = Math.min(parentWidth, Math.max(280, maxWidth));
+    const cssHeight = clamp(Math.round(cssWidth * 0.64), 200, Math.round(viewportHeight * 0.42));
+    const dpr = window.devicePixelRatio || 1;
 
     canvas.style.width = `${cssWidth}px`;
     canvas.style.height = `${cssHeight}px`;
@@ -344,7 +353,7 @@ function startCanvasAnimation() {
 
     width = cssWidth;
     height = cssHeight;
-    padding = Math.max(20, Math.round(cssWidth * 0.1));
+    padding = Math.max(22, Math.round(cssWidth * 0.1));
     stepX = dayCount > 1 ? (width - padding * 2) / (dayCount - 1) : 0;
   }
 
@@ -404,32 +413,6 @@ function startCanvasAnimation() {
     const cursorProgress = progress * Math.max(dayCount - 1, 1);
     const baseIndex = Math.floor(cursorProgress);
     const fractional = cursorProgress - baseIndex;
-    const clearedProgress = baseIndex + fractional;
-
-    winnerTimeline.forEach((entry, index) => {
-      const x = padding + index * stepX;
-      const y = mapY(entry.seconds);
-      const progressDelta = Math.max(0, clearedProgress - index);
-      const cleared = progressDelta > 0.75;
-      const approaching = progressDelta > 0 && progressDelta <= 0.75;
-
-      ctx.save();
-      const radius = cleared ? 7 : 6;
-      const baseAlpha = cleared ? 0.18 : approaching ? 0.28 : 0.12;
-      ctx.fillStyle = `rgba(6, 200, 255, ${baseAlpha})`;
-      ctx.beginPath();
-      ctx.arc(x, y, radius, 0, Math.PI * 2);
-      ctx.fill();
-
-      if (approaching) {
-        ctx.strokeStyle = 'rgba(6, 200, 255, 0.65)';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(x, y, radius + 5, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-      ctx.restore();
-    });
 
     const current = winnerTimeline[Math.min(baseIndex, dayCount - 1)];
     const next = winnerTimeline[Math.min(baseIndex + 1, dayCount - 1)];
@@ -460,11 +443,9 @@ function startCanvasAnimation() {
     ctx.arc(x, y, 6, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.82)';
-    const labelFontSize = clamp(Math.round(width * 0.04), 12, 18);
-    ctx.font = `${labelFontSize}px Inter, sans-serif`;
-    const label = `Day ${current.day} • ${current.name} • ${current.time}`;
-    ctx.fillText(label, padding, padding - 8);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
+    ctx.font = '14px Inter, sans-serif';
+    ctx.fillText(`Day ${current.day} – ${current.name}`, padding, padding - 8);
 
     canvasAnimationId = requestAnimationFrame(drawFrame);
   }
