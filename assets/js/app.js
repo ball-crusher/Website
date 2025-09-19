@@ -8,44 +8,203 @@ const playerSuggestions = document.getElementById('player-suggestions');
 const sortFieldSelect = document.getElementById('sort-field');
 const sortOrderSelect = document.getElementById('sort-order');
 const canvas = document.getElementById('statsCanvas');
+const quickNav = document.querySelector('.quick-nav');
+const quickNavButtons = quickNav
+  ? Array.from(quickNav.querySelectorAll('.quick-nav__button'))
+  : [];
 
 let playerIndex = new Map();
 let currentPlayer = null;
 let winnerTimeline = [];
 let canvasAnimationId = null;
 let canvasResizeHandler = null;
+let quickNavObserver = null;
+let metricsFrameId = null;
+let lastMetrics = null;
+
+function measureViewport() {
+  const viewport = window.visualViewport;
+  const doc = document.documentElement;
+  const screenWidth = window.screen?.width || 0;
+  const screenHeight = window.screen?.height || 0;
+  const fallbackWidth = window.innerWidth || doc.clientWidth || screenWidth || 0;
+  const fallbackHeight = window.innerHeight || doc.clientHeight || screenHeight || 0;
+
+  const width = viewport?.width ?? fallbackWidth;
+  const height = viewport?.height ?? fallbackHeight;
+
+  return {
+    width: Math.max(0, width || fallbackWidth),
+    height: Math.max(0, height || fallbackHeight),
+  };
+}
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
-function applyMobileMetrics() {
-  const width = Math.max(window.innerWidth || document.documentElement.clientWidth || 0, 320);
-  const height = Math.max(window.innerHeight || document.documentElement.clientHeight || 0, 540);
+function applyMobileMetrics({ force = false } = {}) {
+  const { width: measuredWidth, height: measuredHeight } = measureViewport();
+  const roundedWidth = Math.round(measuredWidth);
+  const roundedHeight = Math.round(measuredHeight);
+  const width = clamp(roundedWidth, 280, 1100);
+  const height = clamp(roundedHeight, 400, 1800);
+  const minDimension = Math.min(width, height);
+  const maxDimension = Math.max(width, height);
+  const pixelRatio = window.devicePixelRatio || 1;
+  const orientation = width >= height ? 'landscape' : 'portrait';
+
+  if (lastMetrics) {
+    const widthDelta = Math.abs(width - lastMetrics.width);
+    const heightDelta = Math.abs(height - lastMetrics.height);
+    const orientationChanged = orientation !== lastMetrics.orientation;
+    const widthChanged = widthDelta >= 4;
+    const heightChanged = heightDelta >= 32;
+    if (!force && !orientationChanged && !widthChanged && !heightChanged) {
+      return;
+    }
+  }
+
   const baseWidth = 390;
   const baseHeight = 844;
+  const baseDiagonal = Math.hypot(baseWidth, baseHeight);
+  const diagonal = Math.hypot(width, height);
   const widthScale = width / baseWidth;
   const heightScale = height / baseHeight;
-  const blendScale = widthScale * 0.65 + heightScale * 0.35;
-  const scale = clamp(blendScale, 0.85, 1.2);
-  const layoutWidth = clamp(width * 0.94, 320, 620);
+  const diagonalScale = diagonal / baseDiagonal;
+  const averagedScale = (widthScale + heightScale + diagonalScale) / 3;
+  const densityCompensation = clamp(Math.sqrt(pixelRatio) / 1.5, 0.7, 1.12);
+  const fontScale = clamp(averagedScale / densityCompensation, 0.8, 1.28);
+  const spacingScale = clamp(averagedScale * (orientation === 'landscape' ? 0.9 : 1.05), 0.7, 1.36);
+  const radiusScale = clamp(averagedScale * 0.9, 0.66, 1.22);
+  const elevationScale = clamp(averagedScale * (orientation === 'landscape' ? 0.84 : 1.1), 0.74, 1.36);
+  const layoutTarget = width * (orientation === 'landscape' ? 0.82 : 0.94);
+  const layoutWidth = Math.min(clamp(layoutTarget, 260, 720), width);
 
-  root.style.setProperty('--scale', scale.toFixed(4));
-  root.style.setProperty('--layout-max-width', `${layoutWidth}px`);
-  root.style.setProperty('--viewport-width', `${width}px`);
-  root.style.setProperty('--viewport-height', `${height}px`);
+  lastMetrics = { width, height, orientation };
+
+  root.style.setProperty('--scale', fontScale.toFixed(4));
+  root.style.setProperty('--font-scale', fontScale.toFixed(4));
+  root.style.setProperty('--spacing-scale', spacingScale.toFixed(4));
+  root.style.setProperty('--radius-scale', radiusScale.toFixed(4));
+  root.style.setProperty('--elevation-scale', elevationScale.toFixed(4));
+  root.style.setProperty('--layout-max-width', `${layoutWidth.toFixed(2)}px`);
+  root.style.setProperty('--viewport-width', `${width.toFixed(2)}px`);
+  root.style.setProperty('--viewport-height', `${height.toFixed(2)}px`);
+  root.style.setProperty('--viewport-min', `${minDimension.toFixed(2)}px`);
+  root.style.setProperty('--viewport-max', `${maxDimension.toFixed(2)}px`);
+  root.style.setProperty('--pixel-ratio', pixelRatio.toFixed(3));
   root.style.setProperty('--vh', `${height * 0.01}px`);
   root.style.setProperty('--vw', `${width * 0.01}px`);
 }
 
-applyMobileMetrics();
-window.addEventListener('resize', applyMobileMetrics, { passive: true });
-window.addEventListener('orientationchange', () => {
-  applyMobileMetrics();
-  if (typeof canvasResizeHandler === 'function') {
-    requestAnimationFrame(() => canvasResizeHandler());
+function scheduleMobileMetricsUpdate({ force = false } = {}) {
+  if (metricsFrameId) {
+    return;
   }
-});
+  metricsFrameId = requestAnimationFrame(() => {
+    metricsFrameId = null;
+    applyMobileMetrics({ force });
+  });
+}
+
+applyMobileMetrics({ force: true });
+window.addEventListener(
+  'resize',
+  () => {
+    scheduleMobileMetricsUpdate();
+  },
+  { passive: true },
+);
+window.addEventListener(
+  'orientationchange',
+  () => {
+    lastMetrics = null;
+    scheduleMobileMetricsUpdate({ force: true });
+  },
+  { passive: true },
+);
+if (window.visualViewport) {
+  window.visualViewport.addEventListener(
+    'resize',
+    () => {
+      scheduleMobileMetricsUpdate();
+    },
+    { passive: true },
+  );
+}
+
+function setActiveQuickNav(targetId) {
+  if (!quickNavButtons.length) {
+    return;
+  }
+  quickNavButtons.forEach((button) => {
+    const isActive = button.dataset.scrollTarget === targetId;
+    button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+  });
+}
+
+function setupQuickNav() {
+  if (!quickNav || !quickNavButtons.length) {
+    return;
+  }
+
+  quickNav.addEventListener('click', (event) => {
+    const button = event.target.closest('.quick-nav__button');
+    if (!button) {
+      return;
+    }
+    const targetId = button.dataset.scrollTarget;
+    const target = targetId ? document.getElementById(targetId) : null;
+    if (!target) {
+      return;
+    }
+
+    const navHeight = quickNav.getBoundingClientRect().height;
+    const spacingScale = parseFloat(getComputedStyle(root).getPropertyValue('--spacing-scale')) || 1;
+    const topOffset = navHeight + 12 * spacingScale;
+    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const behavior = prefersReducedMotion ? 'auto' : 'smooth';
+    const targetBounds = target.getBoundingClientRect();
+    const absoluteTop = (window.pageYOffset || document.documentElement.scrollTop || 0) + targetBounds.top;
+    const finalTop = Math.max(absoluteTop - topOffset, 0);
+
+    window.scrollTo({ top: finalTop, behavior });
+    setActiveQuickNav(targetId);
+  });
+
+  const observedSections = quickNavButtons
+    .map((button) => document.getElementById(button.dataset.scrollTarget || ''))
+    .filter(Boolean);
+
+  if (quickNavObserver) {
+    quickNavObserver.disconnect();
+  }
+
+  if (observedSections.length) {
+    setActiveQuickNav(observedSections[0].id);
+    quickNavObserver = new IntersectionObserver(
+      (entries) => {
+        const visibleEntries = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
+        if (!visibleEntries.length) {
+          return;
+        }
+        const topEntry = visibleEntries[0];
+        setActiveQuickNav(topEntry.target.id);
+      },
+      {
+        rootMargin: '-48% 0px -46% 0px',
+        threshold: [0.25, 0.5, 0.75],
+      },
+    );
+
+    observedSections.forEach((section) => quickNavObserver.observe(section));
+  }
+}
+
+setupQuickNav();
 
 async function loadStats() {
   try {
@@ -315,6 +474,10 @@ function startCanvasAnimation() {
 
   if (canvasResizeHandler) {
     window.removeEventListener('resize', canvasResizeHandler);
+    if (window.visualViewport) {
+      window.visualViewport.removeEventListener('resize', canvasResizeHandler);
+      window.visualViewport.removeEventListener('scroll', canvasResizeHandler);
+    }
     canvasResizeHandler = null;
   }
 
@@ -333,6 +496,7 @@ function startCanvasAnimation() {
   let padding = 24;
   let stepX = 0;
   let start = null;
+  let labelFontSize = 14;
 
   function configureDimensions() {
     const parentWidth = canvas.parentElement?.clientWidth || window.innerWidth || 360;
@@ -340,6 +504,8 @@ function startCanvasAnimation() {
     const layoutMax = parseFloat(styles.getPropertyValue('--layout-max-width')) || parentWidth;
     const viewportWidth = parseFloat(styles.getPropertyValue('--viewport-width')) || parentWidth;
     const viewportHeight = parseFloat(styles.getPropertyValue('--viewport-height')) || window.innerHeight || 640;
+    const spacingScale = parseFloat(styles.getPropertyValue('--spacing-scale')) || 1;
+    const fontScale = parseFloat(styles.getPropertyValue('--font-scale')) || 1;
     const maxWidth = Math.min(layoutMax, viewportWidth * 0.96);
     const cssWidth = Math.min(parentWidth, Math.max(280, maxWidth));
     const cssHeight = clamp(Math.round(cssWidth * 0.64), 200, Math.round(viewportHeight * 0.42));
@@ -353,8 +519,9 @@ function startCanvasAnimation() {
 
     width = cssWidth;
     height = cssHeight;
-    padding = Math.max(22, Math.round(cssWidth * 0.1));
+    padding = Math.max(Math.round(18 * spacingScale), Math.round(cssWidth * 0.1));
     stepX = dayCount > 1 ? (width - padding * 2) / (dayCount - 1) : 0;
+    labelFontSize = Math.round(clamp(14 * fontScale, 12, 18));
   }
 
   function mapY(seconds) {
@@ -444,7 +611,7 @@ function startCanvasAnimation() {
     ctx.fill();
 
     ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
-    ctx.font = '14px Inter, sans-serif';
+    ctx.font = `${labelFontSize}px Inter, sans-serif`;
     ctx.fillText(`Day ${current.day} – ${current.name}`, padding, padding - 8);
 
     canvasAnimationId = requestAnimationFrame(drawFrame);
@@ -462,6 +629,10 @@ function startCanvasAnimation() {
   configureDimensions();
   canvasAnimationId = requestAnimationFrame(drawFrame);
   window.addEventListener('resize', canvasResizeHandler, { passive: true });
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', canvasResizeHandler, { passive: true });
+    window.visualViewport.addEventListener('scroll', canvasResizeHandler, { passive: true });
+  }
 }
 
 function parseTimeToSeconds(timeString) {
