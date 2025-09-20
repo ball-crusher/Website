@@ -465,6 +465,18 @@ function renderPlayerResults(entry) {
 
   playerResultsContainer.innerHTML = '';
 
+  if (!sortedRecords.length) {
+    playerResultsContainer.innerHTML = '<p class="no-results">No stats available.</p>';
+    return;
+  }
+
+  const summary = document.createElement('p');
+  summary.className = 'player-results-summary';
+  const count = sortedRecords.length;
+  const dayLabel = count === 1 ? 'day' : 'days';
+  summary.textContent = `Showing ${count} ${dayLabel} for ${entry.name}.`;
+  playerResultsContainer.append(summary);
+
   sortedRecords.forEach((record) => {
     const card = document.createElement('article');
     card.className = 'player-result-card';
@@ -497,10 +509,6 @@ function renderPlayerResults(entry) {
     card.append(meta, rank);
     playerResultsContainer.append(card);
   });
-
-  if (!sortedRecords.length) {
-    playerResultsContainer.innerHTML = '<p class="no-results">No stats available.</p>';
-  }
 }
 
 function startCanvasAnimation() {

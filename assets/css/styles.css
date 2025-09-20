@@ -472,8 +472,19 @@ a:focus {
 }
 
 .player-results {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: calc(1rem * var(--spacing-scale));
+}
+
+.player-results-summary {
+  margin: 0;
+  font-size: clamp(
+      calc(0.86rem * var(--font-scale)),
+      calc((0.82rem + 0.25vw) * var(--font-scale)),
+      calc(0.95rem * var(--font-scale))
+    );
+  color: var(--text-muted);
 }
 
 .player-result-card {
