@@ -326,6 +326,10 @@ a:focus {
   color: var(--text-muted);
 }
 
+.winner-rectangles {
+  font-variant-numeric: tabular-nums;
+}
+
 .details-button {
   appearance: none;
   border: 1px solid rgba(56, 189, 248, 0.4);
@@ -514,6 +518,11 @@ a:focus {
 .time-badge {
   background: rgba(56, 189, 248, 0.16);
   color: var(--accent-strong);
+}
+
+.rectangles-badge {
+  background: rgba(129, 140, 248, 0.18);
+  color: #c7d2fe;
 }
 
 .no-results {
