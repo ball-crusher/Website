@@ -8,44 +8,205 @@ const playerSuggestions = document.getElementById('player-suggestions');
 const sortFieldSelect = document.getElementById('sort-field');
 const sortOrderSelect = document.getElementById('sort-order');
 const canvas = document.getElementById('statsCanvas');
+const quickNav = document.querySelector('.quick-nav');
+const quickNavButtons = quickNav
+  ? Array.from(quickNav.querySelectorAll('.quick-nav__button'))
+  : [];
+
+const lastAppliedMetrics = {
+  width: 0,
+  height: 0,
+  orientation: '',
+};
 
 let playerIndex = new Map();
 let currentPlayer = null;
 let winnerTimeline = [];
 let canvasAnimationId = null;
 let canvasResizeHandler = null;
+let quickNavObserver = null;
+let metricsFrameId = null;
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
-function applyMobileMetrics() {
-  const width = Math.max(window.innerWidth || document.documentElement.clientWidth || 0, 320);
-  const height = Math.max(window.innerHeight || document.documentElement.clientHeight || 0, 540);
-  const baseWidth = 390;
-  const baseHeight = 844;
-  const widthScale = width / baseWidth;
-  const heightScale = height / baseHeight;
-  const blendScale = widthScale * 0.65 + heightScale * 0.35;
-  const scale = clamp(blendScale, 0.85, 1.2);
-  const layoutWidth = clamp(width * 0.94, 320, 620);
-
-  root.style.setProperty('--scale', scale.toFixed(4));
-  root.style.setProperty('--layout-max-width', `${layoutWidth}px`);
-  root.style.setProperty('--viewport-width', `${width}px`);
-  root.style.setProperty('--viewport-height', `${height}px`);
-  root.style.setProperty('--vh', `${height * 0.01}px`);
-  root.style.setProperty('--vw', `${width * 0.01}px`);
+function resolveViewportMeasure() {
+  const viewport = window.visualViewport;
+  const widthCandidates = [
+    viewport?.width,
+    window.innerWidth,
+    document.documentElement.clientWidth,
+    typeof screen !== 'undefined' ? screen.width : undefined,
+  ];
+  const heightCandidates = [
+    window.innerHeight,
+    document.documentElement.clientHeight,
+    viewport?.height,
+    typeof screen !== 'undefined' ? screen.height : undefined,
+  ];
+  const width = widthCandidates.find((value) => Number.isFinite(value) && value > 0) || 0;
+  const layoutHeight = heightCandidates.find((value) => Number.isFinite(value) && value > 0) || 0;
+  return { viewport, width, layoutHeight };
 }
 
-applyMobileMetrics();
-window.addEventListener('resize', applyMobileMetrics, { passive: true });
-window.addEventListener('orientationchange', () => {
-  applyMobileMetrics();
-  if (typeof canvasResizeHandler === 'function') {
-    requestAnimationFrame(() => canvasResizeHandler());
+function applyMobileMetrics({ force = false } = {}) {
+  const { viewport, width: rawWidth, layoutHeight } = resolveViewportMeasure();
+  const rawHeight = viewport?.height && viewport.height > 0 ? viewport.height : layoutHeight;
+  const width = clamp(rawWidth, 280, 1100);
+  const measuredHeight = clamp(layoutHeight || rawHeight || width * 1.6, 400, 1700);
+  const orientation = width >= measuredHeight ? 'landscape' : 'portrait';
+  const minPortraitHeight = width * 1.55;
+  const minLandscapeHeight = width * 0.75;
+  const heightFloor = orientation === 'portrait' ? minPortraitHeight : minLandscapeHeight;
+  const stableHeight = Math.max(measuredHeight, heightFloor);
+  const height = clamp(stableHeight, 420, 1800);
+
+  const widthChanged = Math.abs(width - lastAppliedMetrics.width) >= 0.75;
+  const heightChanged = Math.abs(height - lastAppliedMetrics.height) >= 120;
+  const orientationChanged = orientation !== lastAppliedMetrics.orientation;
+
+  if (!force && !widthChanged && !orientationChanged && !heightChanged) {
+    const vh = (layoutHeight || lastAppliedMetrics.height || height) * 0.01;
+    root.style.setProperty('--vh', `${vh.toFixed(4)}px`);
+    root.style.setProperty('--vw', `${(width * 0.01).toFixed(4)}px`);
+    return;
   }
-});
+
+  lastAppliedMetrics.width = width;
+  lastAppliedMetrics.height = height;
+  lastAppliedMetrics.orientation = orientation;
+
+  const minDimension = Math.min(width, height);
+  const maxDimension = Math.max(width, height);
+  const pixelRatio = window.devicePixelRatio || 1;
+
+  const baseWidth = 390;
+  const baseHeight = 844;
+  const baseDiagonal = Math.hypot(baseWidth, baseHeight);
+  const widthScale = width / baseWidth;
+  const heightScale = height / baseHeight;
+  const diagonalScale = Math.hypot(width, height) / baseDiagonal;
+  const averagedScale = (widthScale * 2 + heightScale + diagonalScale) / 4;
+  const densityCompensation = clamp(Math.sqrt(pixelRatio) / 1.45, 0.75, 1.15);
+  const fontScale = clamp(averagedScale / densityCompensation, 0.85, 1.26);
+  const spacingScale = clamp(
+    (widthScale * 0.68 + heightScale * 0.32) * (orientation === 'landscape' ? 0.9 : 1.05),
+    0.78,
+    1.36,
+  );
+  const radiusScale = clamp(widthScale * 0.92, 0.72, 1.28);
+  const elevationScale = clamp(averagedScale * (orientation === 'landscape' ? 0.88 : 1.08), 0.8, 1.38);
+  const layoutWidth = clamp(
+    width * (orientation === 'landscape' ? 0.86 : 0.95),
+    Math.min(width, 320),
+    Math.min(width * 0.98, 760),
+  );
+
+  root.style.setProperty('--scale', fontScale.toFixed(4));
+  root.style.setProperty('--font-scale', fontScale.toFixed(4));
+  root.style.setProperty('--spacing-scale', spacingScale.toFixed(4));
+  root.style.setProperty('--radius-scale', radiusScale.toFixed(4));
+  root.style.setProperty('--elevation-scale', elevationScale.toFixed(4));
+  root.style.setProperty('--layout-max-width', `${layoutWidth.toFixed(2)}px`);
+  root.style.setProperty('--viewport-width', `${width.toFixed(2)}px`);
+  root.style.setProperty('--viewport-height', `${height.toFixed(2)}px`);
+  root.style.setProperty('--viewport-min', `${minDimension.toFixed(2)}px`);
+  root.style.setProperty('--viewport-max', `${maxDimension.toFixed(2)}px`);
+  root.style.setProperty('--pixel-ratio', pixelRatio.toFixed(3));
+  const vh = (layoutHeight || height) * 0.01;
+  root.style.setProperty('--vh', `${vh.toFixed(4)}px`);
+  root.style.setProperty('--vw', `${(width * 0.01).toFixed(4)}px`);
+}
+
+function scheduleMobileMetricsUpdate() {
+  if (metricsFrameId) {
+    return;
+  }
+  metricsFrameId = requestAnimationFrame(() => {
+    metricsFrameId = null;
+    applyMobileMetrics();
+  });
+}
+
+applyMobileMetrics({ force: true });
+window.addEventListener('resize', scheduleMobileMetricsUpdate, { passive: true });
+window.addEventListener('orientationchange', scheduleMobileMetricsUpdate, { passive: true });
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', scheduleMobileMetricsUpdate, { passive: true });
+}
+
+function setActiveQuickNav(targetId) {
+  if (!quickNavButtons.length) {
+    return;
+  }
+  quickNavButtons.forEach((button) => {
+    const isActive = button.dataset.scrollTarget === targetId;
+    button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+  });
+}
+
+function setupQuickNav() {
+  if (!quickNav || !quickNavButtons.length) {
+    return;
+  }
+
+  quickNav.addEventListener('click', (event) => {
+    const button = event.target.closest('.quick-nav__button');
+    if (!button) {
+      return;
+    }
+    const targetId = button.dataset.scrollTarget;
+    const target = targetId ? document.getElementById(targetId) : null;
+    if (!target) {
+      return;
+    }
+
+    const navHeight = quickNav.getBoundingClientRect().height;
+    const spacingScale = parseFloat(getComputedStyle(root).getPropertyValue('--spacing-scale')) || 1;
+    const topOffset = navHeight + 12 * spacingScale;
+    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const behavior = prefersReducedMotion ? 'auto' : 'smooth';
+    const targetBounds = target.getBoundingClientRect();
+    const absoluteTop = (window.pageYOffset || document.documentElement.scrollTop || 0) + targetBounds.top;
+    const finalTop = Math.max(absoluteTop - topOffset, 0);
+
+    window.scrollTo({ top: finalTop, behavior });
+    setActiveQuickNav(targetId);
+  });
+
+  const observedSections = quickNavButtons
+    .map((button) => document.getElementById(button.dataset.scrollTarget || ''))
+    .filter(Boolean);
+
+  if (quickNavObserver) {
+    quickNavObserver.disconnect();
+  }
+
+  if (observedSections.length) {
+    setActiveQuickNav(observedSections[0].id);
+    quickNavObserver = new IntersectionObserver(
+      (entries) => {
+        const visibleEntries = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
+        if (!visibleEntries.length) {
+          return;
+        }
+        const topEntry = visibleEntries[0];
+        setActiveQuickNav(topEntry.target.id);
+      },
+      {
+        rootMargin: '-48% 0px -46% 0px',
+        threshold: [0.25, 0.5, 0.75],
+      },
+    );
+
+    observedSections.forEach((section) => quickNavObserver.observe(section));
+  }
+}
+
+setupQuickNav();
 
 async function loadStats() {
   try {
@@ -66,7 +227,16 @@ async function loadStats() {
 }
 
 function initialize(dayStats) {
-  const sortedDays = [...dayStats].sort((a, b) => b.day - a.day);
+  const sortedDays = [...dayStats].sort((a, b) => {
+    const dayA = Number(a?.day);
+    const dayB = Number(b?.day);
+    const aFinite = Number.isFinite(dayA);
+    const bFinite = Number.isFinite(dayB);
+    if (!aFinite && !bFinite) return 0;
+    if (!aFinite) return 1;
+    if (!bFinite) return -1;
+    return dayB - dayA;
+  });
   winnerTimeline = buildWinnerTimeline(sortedDays);
   renderOpenStats(sortedDays);
   buildPlayerIndex(sortedDays);
@@ -77,13 +247,34 @@ function initialize(dayStats) {
 function buildWinnerTimeline(days) {
   return days
     .map((day) => {
-      const winner = [...day.players].sort((a, b) => a.rank - b.rank)[0];
+      const players = Array.isArray(day.players)
+        ? day.players.filter((player) => player && typeof player === 'object')
+        : [];
+      if (!players.length) {
+        return null;
+      }
+      const numericDay = Number(day?.day);
+      if (!Number.isFinite(numericDay)) {
+        return null;
+      }
+      const winner = [...players].sort((a, b) => {
+        const rankA = Number(a?.rank);
+        const rankB = Number(b?.rank);
+        if (!Number.isFinite(rankA) && !Number.isFinite(rankB)) return 0;
+        if (!Number.isFinite(rankA)) return 1;
+        if (!Number.isFinite(rankB)) return -1;
+        return rankA - rankB;
+      })[0];
       if (!winner) return null;
+      const winnerName =
+        typeof winner?.name === 'string' && winner.name.trim() ? winner.name.trim() : '—';
+      const winnerTime =
+        typeof winner?.time === 'string' && winner.time.trim() ? winner.time.trim() : '—';
       return {
-        day: day.day,
-        name: winner.name,
-        time: winner.time,
-        seconds: parseTimeToSeconds(winner.time),
+        day: numericDay,
+        name: winnerName,
+        time: winnerTime,
+        seconds: parseTimeToSeconds(winnerTime),
       };
     })
     .filter(Boolean)
@@ -97,7 +288,10 @@ function renderOpenStats(days) {
     return;
   }
 
-  days.forEach((day) => {
+  days.forEach((day, index) => {
+    const players = Array.isArray(day.players)
+      ? day.players.filter((player) => player && typeof player === 'object')
+      : [];
     const card = document.createElement('article');
     card.className = 'day-card';
     card.setAttribute('role', 'listitem');
@@ -107,16 +301,32 @@ function renderOpenStats(days) {
 
     const label = document.createElement('div');
     label.className = 'day-label';
-    label.textContent = `Day ${day.day}`;
+    const dayLabelValue =
+      typeof day?.day === 'number'
+        ? day.day
+        : typeof day?.day === 'string' && day.day.trim()
+        ? day.day.trim()
+        : '—';
+    label.textContent = `Day ${dayLabelValue}`;
 
     const winnerInfo = document.createElement('div');
     winnerInfo.className = 'winner';
-    const topPlayer = [...day.players].sort((a, b) => a.rank - b.rank)[0];
+    const topPlayer = [...players].sort((a, b) => {
+      const rankA = Number(a?.rank);
+      const rankB = Number(b?.rank);
+      if (!Number.isFinite(rankA) && !Number.isFinite(rankB)) return 0;
+      if (!Number.isFinite(rankA)) return 1;
+      if (!Number.isFinite(rankB)) return -1;
+      return rankA - rankB;
+    })[0];
     const winnerLink = document.createElement('a');
     winnerLink.href = buildInstagramLink(topPlayer?.name);
     winnerLink.target = '_blank';
     winnerLink.rel = 'noopener noreferrer';
-    winnerLink.textContent = topPlayer ? topPlayer.name : '—';
+    winnerLink.textContent =
+      topPlayer && typeof topPlayer.name === 'string' && topPlayer.name.trim()
+        ? topPlayer.name
+        : '—';
 
     const winnerLabel = document.createElement('span');
     winnerLabel.textContent = 'Daily winner';
@@ -132,34 +342,62 @@ function renderOpenStats(days) {
 
     const collapse = document.createElement('div');
     collapse.className = 'collapse';
-    const collapseId = `day-${day.day}-details`;
+    const collapseIdBase =
+      typeof day?.day === 'number' || (typeof day?.day === 'string' && day.day.trim())
+        ? String(day.day).trim().replace(/[^a-z0-9_-]/gi, '')
+        : `index-${index + 1}`;
+    const collapseId = `day-${collapseIdBase || `auto-${index + 1}`}-details`;
     collapse.id = collapseId;
     collapse.hidden = true;
     button.setAttribute('aria-controls', collapseId);
 
-    const list = document.createElement('ul');
-    list.className = 'player-list';
+    if (players.length) {
+      const list = document.createElement('ul');
+      list.className = 'player-list';
 
-    [...day.players]
-      .sort((a, b) => a.rank - b.rank)
-      .forEach((player) => {
-        const item = document.createElement('li');
+      players
+        .slice()
+        .sort((a, b) => {
+          const rankA = Number(a?.rank);
+          const rankB = Number(b?.rank);
+          if (!Number.isFinite(rankA) && !Number.isFinite(rankB)) return 0;
+          if (!Number.isFinite(rankA)) return 1;
+          if (!Number.isFinite(rankB)) return -1;
+          return rankA - rankB;
+        })
+        .forEach((player) => {
+          const item = document.createElement('li');
 
-        const left = document.createElement('div');
-        left.className = 'player-name';
-        left.innerHTML = `<strong>${ordinal(player.rank)}</strong> &nbsp; <a href="${buildInstagramLink(
-          player.name
-        )}" target="_blank" rel="noopener noreferrer">${player.name}</a>`;
+          const left = document.createElement('div');
+          left.className = 'player-name';
+          const rank = document.createElement('strong');
+          const numericRank = Number(player?.rank);
+          rank.textContent = Number.isFinite(numericRank) ? ordinal(numericRank) : '—';
+          const nameLink = document.createElement('a');
+          nameLink.href = buildInstagramLink(player?.name);
+          nameLink.target = '_blank';
+          nameLink.rel = 'noopener noreferrer';
+          nameLink.textContent =
+            typeof player?.name === 'string' && player.name.trim() ? player.name : '—';
+          left.append(rank, document.createTextNode(' '), nameLink);
 
-        const right = document.createElement('span');
-        right.className = 'player-time';
-        right.textContent = `Time: ${player.time}`;
+          const right = document.createElement('span');
+          right.className = 'player-time';
+          right.textContent = `Time: ${
+            typeof player?.time === 'string' && player.time.trim() ? player.time : '—'
+          }`;
 
-        item.append(left, right);
-        list.append(item);
-      });
+          item.append(left, right);
+          list.append(item);
+        });
 
-    collapse.append(list);
+      collapse.append(list);
+    } else {
+      const empty = document.createElement('p');
+      empty.className = 'no-results';
+      empty.textContent = 'No players recorded for this day yet.';
+      collapse.append(empty);
+    }
 
     button.addEventListener('click', () => {
       const isOpen = collapse.classList.toggle('open');
@@ -196,7 +434,13 @@ function buildPlayerIndex(days) {
   playerIndex = new Map();
 
   days.forEach((day) => {
-    day.players.forEach((player) => {
+    const players = Array.isArray(day.players)
+      ? day.players.filter((player) => player && typeof player === 'object')
+      : [];
+    players.forEach((player) => {
+      if (!player || typeof player.name !== 'string' || !player.name.trim()) {
+        return;
+      }
       const key = player.name.trim().toLowerCase();
       if (!playerIndex.has(key)) {
         playerIndex.set(key, {
@@ -205,11 +449,27 @@ function buildPlayerIndex(days) {
         });
       }
       const entry = playerIndex.get(key);
+      const numericRank = Number(player?.rank);
+      const numericDay = Number(day?.day);
+      const displayDay = Number.isFinite(numericDay)
+        ? numericDay
+        : typeof day?.day === 'string' && day.day.trim()
+        ? day.day
+        : '—';
+      const displayRank = Number.isFinite(numericRank)
+        ? numericRank
+        : typeof player?.rank === 'string' && player.rank.trim()
+        ? player.rank
+        : '—';
+      const timeValue =
+        typeof player?.time === 'string' && player.time.trim() ? player.time.trim() : '—';
       entry.records.push({
-        day: day.day,
-        rank: player.rank,
-        time: player.time,
-        seconds: parseTimeToSeconds(player.time),
+        day: Number.isFinite(numericDay) ? numericDay : Number.POSITIVE_INFINITY,
+        displayDay,
+        rank: Number.isFinite(numericRank) ? numericRank : Number.POSITIVE_INFINITY,
+        displayRank,
+        time: timeValue,
+        seconds: parseTimeToSeconds(timeValue),
       });
     });
   });
@@ -266,16 +526,24 @@ function renderPlayerResults(entry) {
   const field = sortFieldSelect.value;
   const order = sortOrderSelect.value;
   const multiplier = order === 'asc' ? 1 : -1;
+  const compareNumbers = (valueA, valueB) => {
+    const aFinite = Number.isFinite(valueA);
+    const bFinite = Number.isFinite(valueB);
+    if (!aFinite && !bFinite) return 0;
+    if (!aFinite) return 1;
+    if (!bFinite) return -1;
+    return valueA - valueB;
+  };
 
   const sortedRecords = [...entry.records].sort((a, b) => {
     if (field === 'day') {
-      return (a.day - b.day) * multiplier;
+      return compareNumbers(a.day, b.day) * multiplier;
     }
     if (field === 'rank') {
-      return (a.rank - b.rank) * multiplier;
+      return compareNumbers(a.rank, b.rank) * multiplier;
     }
     if (field === 'time') {
-      return (a.seconds - b.seconds) * multiplier;
+      return compareNumbers(a.seconds, b.seconds) * multiplier;
     }
     return 0;
   });
@@ -288,15 +556,25 @@ function renderPlayerResults(entry) {
 
     const meta = document.createElement('div');
     meta.className = 'meta';
-    meta.innerHTML = `
-      <span class="badge">Day ${record.day}</span>
-      <strong>${entry.name}</strong>
-      <span class="time-badge">Time: ${record.time}</span>
-    `;
+    const dayBadge = document.createElement('span');
+    dayBadge.className = 'badge';
+    dayBadge.textContent = `Day ${record.displayDay ?? record.day ?? '—'}`;
+
+    const nameHeading = document.createElement('strong');
+    nameHeading.textContent = entry.name;
+
+    const timeBadge = document.createElement('span');
+    timeBadge.className = 'time-badge';
+    timeBadge.textContent = `Time: ${record.time}`;
+
+    meta.append(dayBadge, nameHeading, timeBadge);
 
     const rank = document.createElement('span');
     rank.className = 'badge rank-badge';
-    rank.textContent = `Rank ${record.rank}`;
+    const rankLabel = Number.isFinite(record.rank)
+      ? record.displayRank ?? record.rank
+      : record.displayRank ?? '—';
+    rank.textContent = `Rank ${rankLabel}`;
 
     card.append(meta, rank);
     playerResultsContainer.append(card);
@@ -315,6 +593,10 @@ function startCanvasAnimation() {
 
   if (canvasResizeHandler) {
     window.removeEventListener('resize', canvasResizeHandler);
+    if (window.visualViewport) {
+      window.visualViewport.removeEventListener('resize', canvasResizeHandler);
+      window.visualViewport.removeEventListener('scroll', canvasResizeHandler);
+    }
     canvasResizeHandler = null;
   }
 
@@ -333,6 +615,7 @@ function startCanvasAnimation() {
   let padding = 24;
   let stepX = 0;
   let start = null;
+  let labelFontSize = 14;
 
   function configureDimensions() {
     const parentWidth = canvas.parentElement?.clientWidth || window.innerWidth || 360;
@@ -340,6 +623,8 @@ function startCanvasAnimation() {
     const layoutMax = parseFloat(styles.getPropertyValue('--layout-max-width')) || parentWidth;
     const viewportWidth = parseFloat(styles.getPropertyValue('--viewport-width')) || parentWidth;
     const viewportHeight = parseFloat(styles.getPropertyValue('--viewport-height')) || window.innerHeight || 640;
+    const spacingScale = parseFloat(styles.getPropertyValue('--spacing-scale')) || 1;
+    const fontScale = parseFloat(styles.getPropertyValue('--font-scale')) || 1;
     const maxWidth = Math.min(layoutMax, viewportWidth * 0.96);
     const cssWidth = Math.min(parentWidth, Math.max(280, maxWidth));
     const cssHeight = clamp(Math.round(cssWidth * 0.64), 200, Math.round(viewportHeight * 0.42));
@@ -353,8 +638,9 @@ function startCanvasAnimation() {
 
     width = cssWidth;
     height = cssHeight;
-    padding = Math.max(22, Math.round(cssWidth * 0.1));
+    padding = Math.max(Math.round(18 * spacingScale), Math.round(cssWidth * 0.1));
     stepX = dayCount > 1 ? (width - padding * 2) / (dayCount - 1) : 0;
+    labelFontSize = Math.round(clamp(14 * fontScale, 12, 18));
   }
 
   function mapY(seconds) {
@@ -444,7 +730,7 @@ function startCanvasAnimation() {
     ctx.fill();
 
     ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
-    ctx.font = '14px Inter, sans-serif';
+    ctx.font = `${labelFontSize}px Inter, sans-serif`;
     ctx.fillText(`Day ${current.day} – ${current.name}`, padding, padding - 8);
 
     canvasAnimationId = requestAnimationFrame(drawFrame);
@@ -462,6 +748,10 @@ function startCanvasAnimation() {
   configureDimensions();
   canvasAnimationId = requestAnimationFrame(drawFrame);
   window.addEventListener('resize', canvasResizeHandler, { passive: true });
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', canvasResizeHandler, { passive: true });
+    window.visualViewport.addEventListener('scroll', canvasResizeHandler, { passive: true });
+  }
 }
 
 function parseTimeToSeconds(timeString) {
