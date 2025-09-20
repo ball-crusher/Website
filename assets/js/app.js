@@ -8,44 +8,127 @@ const playerSuggestions = document.getElementById('player-suggestions');
 const sortFieldSelect = document.getElementById('sort-field');
 const sortOrderSelect = document.getElementById('sort-order');
 const canvas = document.getElementById('statsCanvas');
+const deviceMeta = document.getElementById('device-meta');
+const mobileNav = document.querySelector('.mobile-nav');
+const mobileNavIndicator = mobileNav?.querySelector('.mobile-nav__indicator') || null;
+const mobileNavButtons = mobileNav ? Array.from(mobileNav.querySelectorAll('.mobile-nav__button')) : [];
 
 let playerIndex = new Map();
 let currentPlayer = null;
 let winnerTimeline = [];
 let canvasAnimationId = null;
 let canvasResizeHandler = null;
+let metricsRaf = null;
+let refreshNavLayout = null;
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
 function applyMobileMetrics() {
-  const width = Math.max(window.innerWidth || document.documentElement.clientWidth || 0, 320);
-  const height = Math.max(window.innerHeight || document.documentElement.clientHeight || 0, 540);
+  const viewport = window.visualViewport;
+  const fallbackWidth = window.innerWidth || document.documentElement.clientWidth || 390;
+  const fallbackHeight = window.innerHeight || document.documentElement.clientHeight || 844;
+  const width = clamp(viewport?.width || fallbackWidth, 280, 1024);
+  const height = clamp(viewport?.height || fallbackHeight, 480, 1440);
   const baseWidth = 390;
   const baseHeight = 844;
+  const baseDiagonal = Math.hypot(baseWidth, baseHeight);
+  const diagonal = Math.hypot(width, height);
   const widthScale = width / baseWidth;
   const heightScale = height / baseHeight;
-  const blendScale = widthScale * 0.65 + heightScale * 0.35;
-  const scale = clamp(blendScale, 0.85, 1.2);
-  const layoutWidth = clamp(width * 0.94, 320, 620);
+  const diagonalScale = diagonal / baseDiagonal;
+  const scale = clamp(widthScale * 0.5 + heightScale * 0.3 + diagonalScale * 0.2, 0.82, 1.32);
+  const fontScale = clamp(widthScale * 0.65 + diagonalScale * 0.35, 0.9, 1.28);
+  const spacingScale = clamp(heightScale * 0.5 + diagonalScale * 0.5, 0.85, 1.35);
+  const radiusScale = clamp(Math.sqrt(widthScale * heightScale), 0.85, 1.25);
+  const navBase = width >= 720 ? 72 : width >= 560 ? 70 : 64;
+  const navHeight = clamp(navBase * spacingScale, 52, 88);
+  const layoutBreakpoint = width >= 720 ? 580 : width >= 560 ? 540 : 520;
+  const safeLeft = viewport ? viewport.offsetLeft : 0;
+  const safeTop = viewport ? viewport.offsetTop : 0;
+  const safeRight = viewport ? Math.max(0, fallbackWidth - (viewport.width + viewport.offsetLeft)) : 0;
+  const safeBottom = viewport ? Math.max(0, fallbackHeight - (viewport.height + viewport.offsetTop)) : 0;
+  const horizontalSafe = clamp(safeLeft + safeRight, 0, width * 0.4);
+  const effectiveWidth = clamp(width - horizontalSafe, 280, 1024);
+  const layoutWidth = clamp(effectiveWidth * 0.98, 320, Math.max(layoutBreakpoint, effectiveWidth - 16));
+  const vh = height * 0.01;
+  const vw = width * 0.01;
+  const devicePixelRatio = window.devicePixelRatio || 1;
 
   root.style.setProperty('--scale', scale.toFixed(4));
-  root.style.setProperty('--layout-max-width', `${layoutWidth}px`);
-  root.style.setProperty('--viewport-width', `${width}px`);
-  root.style.setProperty('--viewport-height', `${height}px`);
-  root.style.setProperty('--vh', `${height * 0.01}px`);
-  root.style.setProperty('--vw', `${width * 0.01}px`);
+  root.style.setProperty('--font-scale', fontScale.toFixed(4));
+  root.style.setProperty('--spacing-scale', spacingScale.toFixed(4));
+  root.style.setProperty('--radius-scale', radiusScale.toFixed(4));
+  root.style.setProperty('--layout-max-width', `${layoutWidth.toFixed(2)}px`);
+  root.style.setProperty('--nav-height', `${navHeight.toFixed(2)}px`);
+  root.style.setProperty('--viewport-width', `${width.toFixed(2)}px`);
+  root.style.setProperty('--viewport-height', `${height.toFixed(2)}px`);
+  root.style.setProperty('--vh', `${vh.toFixed(4)}px`);
+  root.style.setProperty('--vw', `${vw.toFixed(4)}px`);
+  root.style.setProperty('--viewport-inset-top', `${safeTop.toFixed(2)}px`);
+  root.style.setProperty('--viewport-inset-right', `${safeRight.toFixed(2)}px`);
+  root.style.setProperty('--viewport-inset-bottom', `${safeBottom.toFixed(2)}px`);
+  root.style.setProperty('--viewport-inset-left', `${safeLeft.toFixed(2)}px`);
+  root.style.setProperty('--device-pixel-ratio', devicePixelRatio.toFixed(2));
+
+  updateDeviceMeta({
+    width,
+    height,
+    aspect: height / width,
+    fontScale,
+    spacingScale,
+    navHeight,
+    devicePixelRatio,
+  });
+
+  if (typeof refreshNavLayout === 'function') {
+    refreshNavLayout();
+  }
+
+  if (typeof canvasResizeHandler === 'function') {
+    requestAnimationFrame(() => {
+      if (typeof canvasResizeHandler === 'function') {
+        canvasResizeHandler();
+      }
+    });
+  }
+}
+
+function queueMetricComputation() {
+  if (metricsRaf !== null) {
+    return;
+  }
+  metricsRaf = requestAnimationFrame(() => {
+    metricsRaf = null;
+    applyMobileMetrics();
+  });
 }
 
 applyMobileMetrics();
-window.addEventListener('resize', applyMobileMetrics, { passive: true });
-window.addEventListener('orientationchange', () => {
-  applyMobileMetrics();
-  if (typeof canvasResizeHandler === 'function') {
-    requestAnimationFrame(() => canvasResizeHandler());
-  }
-});
+
+window.addEventListener('resize', queueMetricComputation, { passive: true });
+window.addEventListener('orientationchange', queueMetricComputation, { passive: true });
+
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', queueMetricComputation);
+  window.visualViewport.addEventListener('scroll', queueMetricComputation);
+}
+
+function updateDeviceMeta({ width, height, aspect, fontScale, spacingScale, navHeight, devicePixelRatio }) {
+  if (!deviceMeta) return;
+
+  const roundedWidth = Math.round(width);
+  const roundedHeight = Math.round(height);
+  const aspectRatio = aspect > 0 ? aspect : height / Math.max(width, 1);
+  const aspectDisplay = aspectRatio >= 1 ? `${aspectRatio.toFixed(2)}:1` : `1:${(1 / aspectRatio).toFixed(2)}`;
+  const typeScale = Math.round(fontScale * 100);
+  const spacing = Math.round(spacingScale * 100);
+  const nav = Math.round(navHeight);
+  const density = typeof devicePixelRatio === 'number' ? devicePixelRatio.toFixed(2).replace(/\.00$/, '') : '1';
+
+  deviceMeta.textContent = `Viewport ${roundedWidth}×${roundedHeight}px · Aspect ${aspectDisplay} · Type ${typeScale}% · Layout ${spacing}% · DPR ${density} · Nav ${nav}px`;
+}
 
 async function loadStats() {
   try {
@@ -487,6 +570,140 @@ function buildInstagramLink(name) {
   const sanitized = name.replace(/[^a-z0-9._-]/gi, '');
   return `https://instagram.com/${sanitized}`;
 }
+
+function setupMobileNavigation() {
+  if (!mobileNav || !mobileNavButtons.length) {
+    return;
+  }
+
+  const buttonToSection = new Map();
+  const sectionEntries = mobileNavButtons
+    .map((button) => {
+      const targetId = button.dataset.navTarget;
+      if (!targetId) {
+        return null;
+      }
+      const section = document.getElementById(targetId);
+      if (!section) {
+        return null;
+      }
+      buttonToSection.set(button, section);
+      return { button, section };
+    })
+    .filter(Boolean);
+
+  let activeButton = null;
+  let scrollFrame = null;
+
+  function moveIndicator(button) {
+    if (!mobileNavIndicator || !button) {
+      return;
+    }
+    const rect = button.getBoundingClientRect();
+    const navRect = mobileNav.getBoundingClientRect();
+    mobileNavIndicator.style.width = `${rect.width}px`;
+    mobileNavIndicator.style.transform = `translateX(${rect.left - navRect.left}px)`;
+  }
+
+  function setActive(button, options = {}) {
+    if (!button) {
+      return;
+    }
+    const { fromScroll = false } = options;
+    if (fromScroll && activeButton === button) {
+      moveIndicator(button);
+      return;
+    }
+
+    mobileNavButtons.forEach((candidate) => {
+      const isActive = candidate === button;
+      candidate.classList.toggle('is-active', isActive);
+      candidate.setAttribute('aria-pressed', String(isActive));
+    });
+
+    activeButton = button;
+    moveIndicator(button);
+  }
+
+  function getNavOffset() {
+    const styles = getComputedStyle(root);
+    const navHeightValue = parseFloat(styles.getPropertyValue('--nav-height')) || mobileNav.offsetHeight || 0;
+    return navHeightValue + 16;
+  }
+
+  function scrollToSection(section) {
+    const offset = getNavOffset();
+    const rect = section.getBoundingClientRect();
+    const targetY = rect.top + window.pageYOffset - offset;
+    window.scrollTo({ top: Math.max(targetY, 0), behavior: 'smooth' });
+  }
+
+  function updateActiveButton() {
+    if (!sectionEntries.length) {
+      return;
+    }
+    const offset = getNavOffset();
+    let candidate = sectionEntries[0].button;
+    for (const entry of sectionEntries) {
+      const rect = entry.section.getBoundingClientRect();
+      if (rect.top - offset <= 0) {
+        candidate = entry.button;
+      } else {
+        break;
+      }
+    }
+    setActive(candidate, { fromScroll: true });
+  }
+
+  function handleScroll() {
+    if (scrollFrame !== null) {
+      return;
+    }
+    scrollFrame = requestAnimationFrame(() => {
+      scrollFrame = null;
+      updateActiveButton();
+    });
+  }
+
+  mobileNavButtons.forEach((button) => {
+    if (!button.hasAttribute('aria-pressed')) {
+      button.setAttribute('aria-pressed', 'false');
+    }
+
+    const action = button.dataset.navAction;
+    if (action === 'scroll-top') {
+      button.addEventListener('click', () => {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        setActive(button);
+      });
+      return;
+    }
+
+    const section = buttonToSection.get(button);
+    if (!section) {
+      return;
+    }
+
+    button.addEventListener('click', () => {
+      scrollToSection(section);
+      setActive(button);
+    });
+  });
+
+  window.addEventListener('scroll', handleScroll, { passive: true });
+
+  updateActiveButton();
+
+  refreshNavLayout = () => {
+    if (activeButton) {
+      moveIndicator(activeButton);
+    } else if (mobileNavButtons[0]) {
+      setActive(mobileNavButtons[0]);
+    }
+  };
+}
+
+setupMobileNavigation();
 
 playerSearchInput.addEventListener('change', () => updatePlayerResults());
 playerSearchInput.addEventListener('input', () => {
