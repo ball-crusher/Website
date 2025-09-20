@@ -31,6 +31,20 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
+function resolveBoxCount(player) {
+  const rawValue = player?.boxs;
+  if (typeof rawValue === 'number' && Number.isFinite(rawValue) && rawValue > 0) {
+    return Math.round(rawValue);
+  }
+  if (typeof rawValue === 'string') {
+    const parsed = Number.parseInt(rawValue, 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  return 1;
+}
+
 function resolveViewportMeasure() {
   const viewport = window.visualViewport;
   const widthCandidates = [
@@ -283,6 +297,13 @@ function renderOpenStats(days) {
     winnerLabel.textContent = 'Daily winner';
     winnerInfo.append(winnerLink, winnerLabel);
 
+    if (topPlayer) {
+      const winnerRectangles = document.createElement('span');
+      winnerRectangles.className = 'winner-rectangles';
+      winnerRectangles.textContent = `Rectangles: ${resolveBoxCount(topPlayer)}`;
+      winnerInfo.append(winnerRectangles);
+    }
+
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'details-button';
@@ -314,7 +335,7 @@ function renderOpenStats(days) {
 
         const right = document.createElement('span');
         right.className = 'player-time';
-        right.textContent = `Time: ${player.time}`;
+        right.textContent = `Time: ${player.time} • Rectangles: ${resolveBoxCount(player)}`;
 
         item.append(left, right);
         list.append(item);
@@ -371,6 +392,7 @@ function buildPlayerIndex(days) {
         rank: player.rank,
         time: player.time,
         seconds: parseTimeToSeconds(player.time),
+        boxs: resolveBoxCount(player),
       });
     });
   });
@@ -449,11 +471,24 @@ function renderPlayerResults(entry) {
 
     const meta = document.createElement('div');
     meta.className = 'meta';
-    meta.innerHTML = `
-      <span class="badge">Day ${record.day}</span>
-      <strong>${entry.name}</strong>
-      <span class="time-badge">Time: ${record.time}</span>
-    `;
+    const dayBadge = document.createElement('span');
+    dayBadge.className = 'badge';
+    dayBadge.textContent = `Day ${record.day}`;
+
+    const nameEl = document.createElement('strong');
+    nameEl.textContent = entry.name;
+
+    const timeBadge = document.createElement('span');
+    timeBadge.className = 'badge time-badge';
+    timeBadge.textContent = `Time: ${record.time}`;
+
+    const rectanglesBadge = document.createElement('span');
+    rectanglesBadge.className = 'badge rectangles-badge';
+    const rectanglesCount =
+      typeof record.boxs === 'number' && Number.isFinite(record.boxs) ? record.boxs : 1;
+    rectanglesBadge.textContent = `Rectangles: ${rectanglesCount}`;
+
+    meta.append(dayBadge, nameEl, timeBadge, rectanglesBadge);
 
     const rank = document.createElement('span');
     rank.className = 'badge rank-badge';
