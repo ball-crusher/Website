@@ -1,0 +1,21 @@
+{
+  "rules": {
+    ".read": "auth != null",
+    ".write": "false",
+    "requestBox": {
+      ".read": "auth != null",
+      "boxCounts": {
+        "$player": {
+          ".write": "auth != null",
+          ".validate": "newData.hasChildren(['name','count','updatedAt']) && newData.child('name').isString() && newData.child('name').val().length > 0 && newData.child('count').isNumber() && newData.child('count').val() >= 0 && newData.child('updatedAt').isNumber() && (!newData.child('createdAt').exists() || newData.child('createdAt').isNumber())"
+        }
+      },
+      "names": {
+        "$entry": {
+          ".write": "auth != null",
+          ".validate": "newData.hasChildren(['name','sanitizedKey','createdAt']) && newData.child('name').isString() && newData.child('name').val().length > 0 && newData.child('sanitizedKey').isString() && newData.child('sanitizedKey').val().length > 0 && newData.child('createdAt').isNumber() && (!newData.child('countAfter').exists() || newData.child('countAfter').isNumber()) && (!newData.child('uid').exists() || newData.child('uid').isString())"
+        }
+      }
+    }
+  }
+}
