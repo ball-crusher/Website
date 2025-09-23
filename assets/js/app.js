@@ -1,4 +1,44 @@
+// --- Firebase + AdSense imports --------------------------------------------------------------
+// We rely on the tree-shakeable v9 Firebase SDK that can be consumed straight from Google's CDN.
+// Importing the modules at the very top keeps side-effects predictable and makes it easier to tree-shake
+// this script if the project ever migrates to a bundler.
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js';
+import {
+  getDatabase,
+  ref,
+  push,
+  serverTimestamp,
+  runTransaction,
+  onValue,
+  off,
+} from 'https://www.gstatic.com/firebasejs/9.23.0/firebase-database.js';
+import { getAuth, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/9.23.0/firebase-auth.js';
+
+// --- Constants --------------------------------------------------------------------------------
 const DATA_URL = 'data/day_stats.json';
+
+// Replace the placeholder values below with your actual Firebase project configuration.
+// Keeping the config inline avoids having to load yet another script tag and works fine for
+// public clients as long as the Realtime Database rules are restrictive.
+const firebaseConfig = {
+  apiKey: 'YOUR_FIREBASE_API_KEY',
+  authDomain: 'YOUR_FIREBASE_PROJECT.firebaseapp.com',
+  databaseURL: 'https://YOUR_FIREBASE_PROJECT-default-rtdb.firebaseio.com',
+  projectId: 'YOUR_FIREBASE_PROJECT',
+  storageBucket: 'YOUR_FIREBASE_PROJECT.appspot.com',
+  messagingSenderId: '000000000000',
+  appId: '1:000000000000:web:0000000000000000',
+};
+
+// Store the user's preferred name locally so we can automatically subscribe to their counter on reloads.
+const REQUEST_BOX_STORAGE_KEY = 'requestBox:data';
+// Provide the AdSense client ID once you have an approved account.
+const ADSENSE_CLIENT_ID = 'ca-pub-XXXXXXXXXXXXXXXX';
+const ADSENSE_SCRIPT_ID = 'adsbygoogle-loader';
+const ADSENSE_SCRIPT_URL = `https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${ADSENSE_CLIENT_ID}`;
+// Delay reloading so the UI has time to animate the updated count and render the ad.
+const REQUEST_BOX_RELOAD_DELAY = 1600;
+const FIREBASE_PLACEHOLDER_TOKEN = 'YOUR_FIREBASE';
 
 const root = document.documentElement;
 const openStatsGrid = document.getElementById('open-stats-grid');
@@ -12,6 +52,13 @@ const quickNav = document.querySelector('.quick-nav');
 const quickNavButtons = quickNav
   ? Array.from(quickNav.querySelectorAll('.quick-nav__button'))
   : [];
+const requestBoxForm = document.getElementById('request-box-form');
+const requestBoxNameInput = document.getElementById('request-box-name');
+const requestBoxButton = document.getElementById('request-box-button');
+const requestBoxCountValue = document.getElementById('request-box-count');
+const requestBoxCountPlural = document.getElementById('request-box-count-plural');
+const requestBoxError = document.getElementById('request-box-error');
+const requestBoxAdContainer = document.getElementById('request-box-ad');
 
 const lastAppliedMetrics = {
   width: 0,
@@ -26,6 +73,13 @@ let canvasAnimationId = null;
 let canvasResizeHandler = null;
 let quickNavObserver = null;
 let metricsFrameId = null;
+let firebaseAppInstance = null;
+let firebaseDatabaseInstance = null;
+let firebaseAuthInstance = null;
+let authReadyPromise = null;
+let requestBoxLoading = false;
+let requestBoxCountUnsubscribe = null;
+let adSenseScriptRequested = false;
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -221,6 +275,394 @@ function setupQuickNav() {
 }
 
 setupQuickNav();
+
+// --- Request box helpers ----------------------------------------------------------------------
+function isFirebaseConfigValid(config) {
+  if (!config || typeof config !== 'object') {
+    return false;
+  }
+  return Object.values(config).every((value) => {
+    return typeof value === 'string' && value.trim() && !value.includes(FIREBASE_PLACEHOLDER_TOKEN);
+  });
+}
+
+function initializeFirebaseApp() {
+  if (firebaseAppInstance || !isFirebaseConfigValid(firebaseConfig)) {
+    return;
+  }
+
+  // Boot the Firebase SDK using the provided configuration so we can reach the Realtime Database.
+  firebaseAppInstance = initializeApp(firebaseConfig);
+  firebaseDatabaseInstance = getDatabase(firebaseAppInstance);
+  firebaseAuthInstance = getAuth(firebaseAppInstance);
+  // Let Firebase reuse the visitor's preferred language for any Auth related prompts.
+  firebaseAuthInstance.useDeviceLanguage?.();
+
+  // Wrap the auth state listener inside a promise to make awaiting authentication straightforward.
+  authReadyPromise = new Promise((resolve, reject) => {
+    const unsubscribe = onAuthStateChanged(
+      firebaseAuthInstance,
+      (user) => {
+        if (user) {
+          unsubscribe();
+          resolve(user);
+        }
+      },
+      (error) => {
+        unsubscribe();
+        reject(error);
+      },
+    );
+  });
+
+  // Authenticate anonymously so every database write is properly authorised without extra UI friction.
+  signInAnonymously(firebaseAuthInstance).catch((error) => {
+    console.error('Anonymous Firebase sign-in failed:', error);
+    showRequestBoxError('Unable to authenticate with Firebase. Please try again later.');
+  });
+}
+
+async function ensureFirebaseAuth() {
+  if (!isFirebaseConfigValid(firebaseConfig)) {
+    throw new Error('Missing Firebase configuration');
+  }
+
+  if (!firebaseAppInstance) {
+    initializeFirebaseApp();
+  }
+
+  // Fall back to a rejected promise if something prevented us from initialising auth.
+  if (!authReadyPromise) {
+    authReadyPromise = Promise.reject(new Error('Firebase auth not initialised'));
+  }
+
+  return authReadyPromise.catch((error) => {
+    showRequestBoxError('Authentication error. Please reload the page and try again.');
+    throw error;
+  });
+}
+
+function sanitizeRequestName(name) {
+  if (typeof name !== 'string') {
+    return '';
+  }
+  const trimmed = name.trim().toLowerCase();
+  if (!trimmed) {
+    return '';
+  }
+  // Replace everything that is not a lowercase letter or digit with a dash so the value is Firebase-safe.
+  const sanitized = trimmed.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return sanitized.slice(0, 64);
+}
+
+function updateRequestBoxButtonState() {
+  if (!requestBoxButton || !requestBoxNameInput) {
+    return;
+  }
+  // Keep the control disabled while loading to avoid duplicate submissions.
+  const hasValue = Boolean(requestBoxNameInput.value.trim());
+  requestBoxButton.disabled = requestBoxLoading || !hasValue;
+}
+
+function showRequestBoxError(message) {
+  if (!requestBoxError) {
+    return;
+  }
+  if (message) {
+    requestBoxError.textContent = message;
+    requestBoxError.hidden = false;
+  } else {
+    requestBoxError.textContent = '';
+    requestBoxError.hidden = true;
+  }
+}
+
+function clearRequestBoxError() {
+  showRequestBoxError('');
+}
+
+function updateRequestBoxCount(count) {
+  if (!requestBoxCountValue || !requestBoxCountPlural) {
+    return;
+  }
+  const safeCount = Number.isFinite(count) && count >= 0 ? Math.round(count) : 0;
+  // Writing the number explicitly keeps the UI and assistive tech in sync.
+  requestBoxCountValue.textContent = String(safeCount);
+  if (safeCount === 1) {
+    requestBoxCountPlural.textContent = '';
+    requestBoxCountPlural.setAttribute('aria-hidden', 'true');
+  } else {
+    requestBoxCountPlural.textContent = 'es';
+    requestBoxCountPlural.setAttribute('aria-hidden', 'false');
+  }
+}
+
+function detachRequestBoxCounter() {
+  if (requestBoxCountUnsubscribe) {
+    requestBoxCountUnsubscribe();
+    requestBoxCountUnsubscribe = null;
+  }
+}
+
+async function subscribeToRequestBoxCount(sanitizedKey) {
+  if (!sanitizedKey) {
+    return;
+  }
+
+  try {
+    await ensureFirebaseAuth();
+  } catch (error) {
+    console.error('Unable to authenticate for counter subscription:', error);
+    return;
+  }
+
+  if (!firebaseDatabaseInstance) {
+    return;
+  }
+
+  // Clean up any stale subscription before listening to a new player's counter.
+  detachRequestBoxCounter();
+
+  const counterRef = ref(firebaseDatabaseInstance, `requestBox/boxCounts/${sanitizedKey}`);
+  const listener = (snapshot) => {
+    const value = snapshot.val();
+    const count = value && typeof value.count !== 'undefined' ? Number.parseInt(value.count, 10) : 0;
+    updateRequestBoxCount(Number.isFinite(count) ? count : 0);
+  };
+  // The onValue listener keeps the counter live without having to poll the backend.
+  onValue(counterRef, listener, (error) => {
+    console.error('Realtime counter listener failed:', error);
+    showRequestBoxError('Unable to refresh the live counter at the moment.');
+  });
+  requestBoxCountUnsubscribe = () => off(counterRef, 'value', listener);
+}
+
+function persistRequestBoxName(payload) {
+  if (!window.localStorage) {
+    return;
+  }
+  try {
+    if (!payload) {
+      window.localStorage.removeItem(REQUEST_BOX_STORAGE_KEY);
+      return;
+    }
+    // Persist both the friendly name and its sanitized counterpart so we can restore subscriptions later.
+    window.localStorage.setItem(REQUEST_BOX_STORAGE_KEY, JSON.stringify(payload));
+  } catch (error) {
+    console.warn('Failed to persist request box name in storage:', error);
+  }
+}
+
+function restoreRequestBoxName() {
+  if (!requestBoxNameInput) {
+    return;
+  }
+  try {
+    const raw = window.localStorage?.getItem(REQUEST_BOX_STORAGE_KEY);
+    if (!raw) {
+      updateRequestBoxButtonState();
+      return;
+    }
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed.name === 'string') {
+      requestBoxNameInput.value = parsed.name;
+      const sanitizedKey = typeof parsed.key === 'string' ? parsed.key : sanitizeRequestName(parsed.name);
+      const storedCount = Number.parseInt(parsed.count, 10);
+      if (Number.isFinite(storedCount)) {
+        updateRequestBoxCount(storedCount);
+      }
+      if (sanitizedKey) {
+        // Subscribe immediately so the counter keeps updating as soon as the page loads.
+        subscribeToRequestBoxCount(sanitizedKey);
+      }
+    }
+  } catch (error) {
+    console.warn('Unable to restore request box preferences:', error);
+  } finally {
+    updateRequestBoxButtonState();
+  }
+}
+
+function handleRequestBoxInput() {
+  clearRequestBoxError();
+  updateRequestBoxButtonState();
+}
+
+function hasValidAdSenseClient() {
+  return typeof ADSENSE_CLIENT_ID === 'string' && ADSENSE_CLIENT_ID && !ADSENSE_CLIENT_ID.includes('XXXXXXXXXXXX');
+}
+
+function displayRequestBoxAd() {
+  if (!requestBoxAdContainer) {
+    return;
+  }
+
+  requestBoxAdContainer.hidden = false;
+
+  if (!hasValidAdSenseClient()) {
+    // Provide a helpful placeholder while developing locally without a valid AdSense configuration.
+    requestBoxAdContainer.textContent = 'Configure your Google AdSense client ID in assets/js/app.js to display the ad.';
+    requestBoxAdContainer.classList.add('request-box__ad--placeholder');
+    return;
+  }
+
+  const adSlot = requestBoxAdContainer.querySelector('ins.adsbygoogle');
+  if (adSlot) {
+    adSlot.setAttribute('data-ad-client', ADSENSE_CLIENT_ID);
+  }
+
+  if (adSenseScriptRequested) {
+    try {
+      (window.adsbygoogle = window.adsbygoogle || []).push({});
+    } catch (error) {
+      console.error('Unable to refresh AdSense slot:', error);
+    }
+    return;
+  }
+
+  if (document.getElementById(ADSENSE_SCRIPT_ID)) {
+    // If another part of the app already injected the script we can re-use it immediately.
+    adSenseScriptRequested = true;
+    try {
+      (window.adsbygoogle = window.adsbygoogle || []).push({});
+    } catch (error) {
+      console.error('Unable to queue AdSense slot:', error);
+    }
+    return;
+  }
+
+  const script = document.createElement('script');
+  script.id = ADSENSE_SCRIPT_ID;
+  script.async = true;
+  script.src = ADSENSE_SCRIPT_URL;
+  script.crossOrigin = 'anonymous';
+  script.onload = () => {
+    adSenseScriptRequested = true;
+    try {
+      (window.adsbygoogle = window.adsbygoogle || []).push({});
+    } catch (error) {
+      console.error('AdSense slot push failed:', error);
+    }
+  };
+  script.onerror = (event) => {
+    console.error('AdSense failed to load:', event?.message || event);
+  };
+  document.head.append(script);
+}
+
+async function handleRequestBoxSubmit(event) {
+  event.preventDefault();
+
+  if (!requestBoxNameInput) {
+    return;
+  }
+
+  const rawName = requestBoxNameInput.value.trim();
+  if (!rawName) {
+    showRequestBoxError('Please enter your name before requesting a box.');
+    updateRequestBoxButtonState();
+    return;
+  }
+
+  const sanitized = sanitizeRequestName(rawName);
+  if (!sanitized) {
+    showRequestBoxError('Names must contain at least one letter or number.');
+    return;
+  }
+
+  clearRequestBoxError();
+  requestBoxLoading = true;
+  updateRequestBoxButtonState();
+
+  try {
+    await ensureFirebaseAuth();
+    if (!firebaseDatabaseInstance) {
+      throw new Error('Firebase database unavailable');
+    }
+
+    // Atomically increment the counter so concurrent clicks do not clobber each other.
+    const counterRef = ref(firebaseDatabaseInstance, `requestBox/boxCounts/${sanitized}`);
+    const transactionResult = await runTransaction(counterRef, (currentData) => {
+      if (!currentData) {
+        return {
+          name: rawName,
+          count: 1,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        };
+      }
+      const currentCount = Number.parseInt(currentData.count, 10);
+      const safeCurrent = Number.isFinite(currentCount) ? currentCount : 0;
+      return {
+        ...currentData,
+        name: rawName,
+        count: safeCurrent + 1,
+        updatedAt: serverTimestamp(),
+      };
+    });
+
+    if (!transactionResult.committed) {
+      throw new Error('Firebase transaction aborted');
+    }
+
+    const snapshotValue = transactionResult.snapshot?.val();
+    const updatedCount = snapshotValue && Number.isFinite(Number.parseInt(snapshotValue.count, 10))
+      ? Number.parseInt(snapshotValue.count, 10)
+      : 1;
+
+    // Log the individual request including the resulting counter value so moderators can audit later.
+    const historyRef = ref(firebaseDatabaseInstance, 'requestBox/names');
+    await push(historyRef, {
+      name: rawName,
+      sanitizedKey: sanitized,
+      countAfter: updatedCount,
+      createdAt: serverTimestamp(),
+      uid: firebaseAuthInstance?.currentUser?.uid || null,
+    });
+
+    persistRequestBoxName({ name: rawName, key: sanitized, count: updatedCount });
+    subscribeToRequestBoxCount(sanitized);
+    updateRequestBoxCount(updatedCount);
+    displayRequestBoxAd();
+
+    // Reload after a short delay so the freshly inserted ad can render correctly according to AdSense policies.
+    window.setTimeout(() => {
+      window.location.reload();
+    }, REQUEST_BOX_RELOAD_DELAY);
+  } catch (error) {
+    console.error('Request box submission failed:', error);
+    showRequestBoxError('We could not reach Firebase right now. Please try again shortly.');
+  } finally {
+    requestBoxLoading = false;
+    updateRequestBoxButtonState();
+  }
+}
+
+function setupRequestBox() {
+  if (!requestBoxForm || !requestBoxNameInput || !requestBoxButton) {
+    return;
+  }
+
+  if (!isFirebaseConfigValid(firebaseConfig)) {
+    requestBoxNameInput.disabled = true;
+    requestBoxButton.disabled = true;
+    showRequestBoxError('Add your Firebase configuration in assets/js/app.js to enable request boxes.');
+    return;
+  }
+
+  initializeFirebaseApp();
+  restoreRequestBoxName();
+  if (requestBoxCountValue) {
+    const initialCount = Number.parseInt(requestBoxCountValue.textContent, 10);
+    updateRequestBoxCount(Number.isFinite(initialCount) ? initialCount : 0);
+  }
+
+  // React to typing changes and submissions so we can validate and persist the data.
+  requestBoxNameInput.addEventListener('input', handleRequestBoxInput);
+  requestBoxForm.addEventListener('submit', handleRequestBoxSubmit);
+}
+
+setupRequestBox();
 
 async function loadStats() {
   try {
