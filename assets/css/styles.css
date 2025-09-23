@@ -559,6 +559,216 @@ a:focus {
   border: 1px solid rgba(148, 163, 184, 0.24);
 }
 
+/*
+  Extra Box panel styles -----------------------------------------------------
+  The following rules provide a flexible layout for the Extra Box section with
+  two banner ads, one rewarded ad container, and the request form. The grid
+  collapses nicely on smaller screens while keeping the futuristic aesthetic of
+  the rest of the page.
+*/
+
+.panel--extra {
+  /* Slightly brighter surface to make the monetization block stand out. */
+  background: linear-gradient(180deg, rgba(12, 18, 30, 0.92) 0%, rgba(12, 18, 30, 0.78) 100%);
+  border-color: rgba(56, 189, 248, 0.28);
+  display: grid;
+  gap: calc(1.8rem * var(--spacing-scale));
+}
+
+.extra-box__layout {
+  display: grid;
+  gap: calc(1.6rem * var(--spacing-scale));
+}
+
+@media (min-width: 768px) {
+  .extra-box__layout {
+    /* Two columns on tablets/desktops: ads left, content right. */
+    grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.2fr);
+    align-items: stretch;
+  }
+}
+
+.extra-box__ads {
+  display: grid;
+  gap: calc(1rem * var(--spacing-scale));
+}
+
+.ad-slot {
+  position: relative;
+  border-radius: var(--radius-md);
+  border: 1px dashed rgba(56, 189, 248, 0.4);
+  background: rgba(8, 15, 35, 0.65);
+  min-height: clamp(120px, 22vw, 180px);
+  padding: calc(1.2rem * var(--spacing-scale));
+  display: grid;
+  place-items: center;
+  text-align: center;
+  overflow: hidden;
+}
+
+.ad-slot--reward {
+  min-height: clamp(160px, 32vw, 220px);
+  border-style: solid;
+  border-color: rgba(14, 165, 233, 0.45);
+  background: rgba(12, 23, 50, 0.72);
+  box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.18);
+}
+
+.ad-slot--reward[data-ad-state='loading']::after,
+.ad-slot--reward[data-ad-state='simulated']::after {
+  content: attr(data-ad-message);
+  font-size: clamp(calc(0.82rem * var(--font-scale)), calc((0.78rem + 0.3vw) * var(--font-scale)),
+      calc(0.96rem * var(--font-scale)));
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(125, 211, 252, 0.85);
+}
+
+.ad-slot__placeholder {
+  margin: 0;
+  font-size: clamp(calc(0.78rem * var(--font-scale)), calc((0.74rem + 0.2vw) * var(--font-scale)),
+      calc(0.92rem * var(--font-scale)));
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.66);
+}
+
+.extra-box__content {
+  display: grid;
+  gap: calc(1.4rem * var(--spacing-scale));
+  background: rgba(8, 13, 30, 0.78);
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  padding: calc(1.5rem * var(--spacing-scale));
+  box-shadow: inset 0 0 0 1px rgba(8, 145, 178, 0.18);
+}
+
+.extra-box__form {
+  display: grid;
+  gap: calc(1rem * var(--spacing-scale));
+}
+
+.extra-box__label {
+  display: grid;
+  gap: calc(0.5rem * var(--spacing-scale));
+  font-size: clamp(calc(0.85rem * var(--font-scale)), calc((0.8rem + 0.25vw) * var(--font-scale)),
+      calc(0.95rem * var(--font-scale)));
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.extra-box__label input {
+  appearance: none;
+  width: 100%;
+  padding: clamp(calc(0.75rem * var(--spacing-scale)), calc((0.7rem + 0.35vw) * var(--spacing-scale)),
+      calc(0.95rem * var(--spacing-scale)))
+    clamp(calc(1rem * var(--spacing-scale)), calc((0.9rem + 0.5vw) * var(--spacing-scale)),
+      calc(1.35rem * var(--spacing-scale)));
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  background: rgba(15, 23, 42, 0.85);
+  color: var(--text-primary);
+  font-size: clamp(calc(1rem * var(--font-scale)), calc((0.95rem + 0.4vw) * var(--font-scale)),
+      calc(1.15rem * var(--font-scale)));
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.extra-box__label input::placeholder {
+  color: rgba(148, 163, 184, 0.5);
+  font-weight: 500;
+}
+
+.extra-box__label input:focus {
+  outline: none;
+  border-color: rgba(56, 189, 248, 0.65);
+  box-shadow: 0 0 0 calc(3px * var(--spacing-scale)) rgba(14, 165, 233, 0.2);
+}
+
+.extra-box__summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: calc(0.5rem * var(--spacing-scale));
+  padding: calc(0.9rem * var(--spacing-scale)) calc(1.1rem * var(--spacing-scale));
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  background: rgba(6, 182, 212, 0.08);
+}
+
+.extra-box__summary-label {
+  font-size: clamp(calc(0.92rem * var(--font-scale)), calc((0.88rem + 0.24vw) * var(--font-scale)),
+      calc(1.05rem * var(--font-scale)));
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(125, 211, 252, 0.9);
+}
+
+.extra-box__summary-value {
+  font-size: clamp(calc(1.6rem * var(--font-scale)), calc((1.45rem + 0.9vw) * var(--font-scale)),
+      calc(1.9rem * var(--font-scale)));
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--accent-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+.extra-box__status {
+  margin: 0;
+  font-size: clamp(calc(0.85rem * var(--font-scale)), calc((0.8rem + 0.3vw) * var(--font-scale)),
+      calc(0.98rem * var(--font-scale)));
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+
+.extra-box__status[data-state='success'] {
+  color: #bbf7d0;
+}
+
+.extra-box__status[data-state='error'] {
+  color: #fda4af;
+}
+
+.extra-box__button {
+  appearance: none;
+  border: none;
+  border-radius: 999px;
+  padding: clamp(calc(0.75rem * var(--spacing-scale)), calc((0.7rem + 0.4vw) * var(--spacing-scale)),
+      calc(1rem * var(--spacing-scale)))
+    clamp(calc(1.6rem * var(--spacing-scale)), calc((1.4rem + 1vw) * var(--spacing-scale)),
+      calc(2.2rem * var(--spacing-scale)));
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.55), rgba(8, 145, 178, 0.45));
+  color: var(--text-primary);
+  font-size: clamp(calc(1rem * var(--font-scale)), calc((0.95rem + 0.4vw) * var(--font-scale)),
+      calc(1.12rem * var(--font-scale)));
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(0.5rem * var(--spacing-scale));
+}
+
+.extra-box__button:hover,
+.extra-box__button:focus-visible {
+  outline: none;
+  transform: translateY(calc(-1px * var(--spacing-scale)));
+  box-shadow: 0 calc(14px * var(--elevation-scale)) calc(28px * var(--elevation-scale))
+    rgba(8, 145, 178, 0.35);
+}
+
+.extra-box__button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+  transform: none;
+  box-shadow: none;
+}
+
 @media (min-width: 560px) {
   :root {
     --layout-max-width: 540px;
