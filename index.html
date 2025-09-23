@@ -44,6 +44,9 @@
           <button type="button" class="quick-nav__button" data-scroll-target="hero" aria-pressed="true">
             Overview
           </button>
+          <button type="button" class="quick-nav__button" data-scroll-target="request-box">
+            Request box
+          </button>
           <button type="button" class="quick-nav__button" data-scroll-target="open-stats">
             Open stats
           </button>
@@ -54,6 +57,42 @@
       </nav>
 
       <main class="main" id="content">
+        <section id="request-box" class="panel request-panel" aria-labelledby="request-box-title">
+          <div class="panel__header">
+            <h2 id="request-box-title" class="panel__title">Request a Box</h2>
+            <span class="panel__subtitle">Claim a fresh box and keep your streak alive</span>
+          </div>
+          <div class="request-panel__content">
+            <div class="request-panel__field-group">
+              <label for="request-player-name">
+                Your player name
+                <input
+                  type="text"
+                  id="request-player-name"
+                  name="request-player-name"
+                  placeholder="e.g. player1"
+                  autocomplete="name"
+                  inputmode="text"
+                  maxlength="40"
+                  required
+                />
+              </label>
+            </div>
+            <div class="request-panel__actions">
+              <button type="button" id="request-box-button" class="request-panel__button">
+                Request box
+              </button>
+              <div id="request-box-count" class="request-panel__count" aria-live="polite">
+                Enter your player name to see your boxes.
+              </div>
+            </div>
+            <p id="request-box-status" class="request-panel__status" role="status" aria-live="polite"></p>
+            <div id="request-ad-slot" class="request-panel__ad" hidden aria-hidden="true">
+              <p class="request-panel__ad-label" aria-hidden="true">Advertisement</p>
+            </div>
+          </div>
+        </section>
+
         <section id="open-stats" class="panel" aria-labelledby="open-stats-title">
           <div class="panel__header">
             <h2 id="open-stats-title" class="panel__title">Open Stats</h2>
@@ -108,6 +147,29 @@
         Data refreshes daily.
       </footer>
     </div>
+
+    <!--
+      The following configuration blocks keep secrets outside of the JavaScript bundle
+      and make it easier to provide environment specific settings without touching
+      the main logic file. Replace the placeholder values with your production keys.
+    -->
+    <script type="application/json" id="firebase-config">
+      {
+        "apiKey": "",
+        "authDomain": "",
+        "databaseURL": "",
+        "projectId": "",
+        "storageBucket": "",
+        "messagingSenderId": "",
+        "appId": ""
+      }
+    </script>
+    <script type="application/json" id="adsense-config">
+      {
+        "adClient": "",
+        "adSlot": ""
+      }
+    </script>
 
     <script src="assets/js/app.js" type="module"></script>
   </body>

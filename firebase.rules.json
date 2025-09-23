@@ -1,0 +1,29 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "players": {
+      ".read": "auth != null",
+      "$playerId": {
+        ".write": "auth != null",
+        ".validate": "newData.hasChildren(['name','lastRequestAt','totalBoxes']) && newData.child('totalBoxes').isNumber() && newData.child('totalBoxes').val() >= 0"
+      }
+    },
+    "boxCounts": {
+      ".read": "auth != null",
+      "$playerId": {
+        ".write": "auth != null",
+        ".validate": "newData.isNumber() && newData.val() >= 0"
+      }
+    },
+    "playerRequests": {
+      ".read": "auth != null",
+      "$playerId": {
+        ".write": "auth != null",
+        "$requestId": {
+          ".validate": "newData.hasChildren(['requestedAt']) && newData.child('requestedAt').exists()"
+        }
+      }
+    }
+  }
+}

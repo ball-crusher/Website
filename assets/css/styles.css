@@ -257,6 +257,152 @@ a:focus {
   color: var(--text-muted);
 }
 
+/*
+ * Request box module
+ * ------------------------------------------------------------------
+ * The following block styles the newly added request form so that it
+ * inherits the same visual language used across the rest of the
+ * dashboard. Generous comments are included to highlight the
+ * reasoning behind each rule and to make future adjustments easier.
+ */
+.request-panel__content {
+  display: grid;
+  gap: calc(1.2rem * var(--spacing-scale));
+}
+
+.request-panel__field-group {
+  display: grid;
+  gap: calc(0.55rem * var(--spacing-scale));
+}
+
+.request-panel__field-group label {
+  display: grid;
+  gap: calc(0.45rem * var(--spacing-scale));
+  font-size: clamp(calc(0.86rem * var(--font-scale)),
+      calc((0.82rem + 0.2vw) * var(--font-scale)), calc(0.98rem * var(--font-scale)));
+  color: var(--text-secondary);
+}
+
+.request-panel__field-group input {
+  appearance: none;
+  width: 100%;
+  padding: clamp(calc(0.75rem * var(--spacing-scale)),
+      calc((0.7rem + 0.4vw) * var(--spacing-scale)), calc(1rem * var(--spacing-scale)));
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  background: rgba(10, 17, 35, 0.9);
+  color: var(--text-primary);
+  font: inherit;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.request-panel__field-group input:focus {
+  outline: none;
+  border-color: rgba(56, 189, 248, 0.65);
+  box-shadow: 0 0 0 calc(2px * var(--spacing-scale)) rgba(56, 189, 248, 0.2);
+}
+
+.request-panel__actions {
+  display: grid;
+  gap: calc(0.75rem * var(--spacing-scale));
+}
+
+.request-panel__button {
+  appearance: none;
+  border: none;
+  border-radius: 999px;
+  padding: clamp(calc(0.8rem * var(--spacing-scale)),
+      calc((0.78rem + 0.5vw) * var(--spacing-scale)), calc(1.05rem * var(--spacing-scale)))
+    clamp(calc(1.4rem * var(--spacing-scale)),
+      calc((1.2rem + 1vw) * var(--spacing-scale)), calc(1.8rem * var(--spacing-scale)));
+  font-size: clamp(calc(0.95rem * var(--font-scale)),
+      calc((0.9rem + 0.32vw) * var(--font-scale)), calc(1.08rem * var(--font-scale)));
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.42), rgba(14, 165, 233, 0.16));
+  color: var(--text-primary);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(0.35rem * var(--spacing-scale));
+  transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease;
+}
+
+.request-panel__button:hover,
+.request-panel__button:focus-visible {
+  outline: none;
+  transform: translateY(calc(-1px * var(--spacing-scale)));
+  box-shadow: 0 calc(12px * var(--elevation-scale)) calc(24px * var(--elevation-scale))
+    rgba(14, 165, 233, 0.35);
+}
+
+.request-panel__button:disabled {
+  opacity: 0.6;
+  cursor: progress;
+  transform: none;
+  box-shadow: none;
+}
+
+.request-panel__count {
+  font-size: clamp(calc(0.92rem * var(--font-scale)),
+      calc((0.88rem + 0.25vw) * var(--font-scale)), calc(1.05rem * var(--font-scale)));
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.request-panel__status {
+  margin: 0;
+  font-size: clamp(calc(0.82rem * var(--font-scale)),
+      calc((0.78rem + 0.2vw) * var(--font-scale)), calc(0.95rem * var(--font-scale)));
+  color: var(--accent-strong);
+  min-height: 1.2em;
+}
+
+.request-panel__status--error {
+  color: #f87171;
+}
+
+.request-panel__ad {
+  border-radius: var(--radius-md);
+  border: 1px dashed rgba(56, 189, 248, 0.45);
+  background: rgba(8, 18, 38, 0.8);
+  padding: calc(1rem * var(--spacing-scale));
+  min-height: clamp(120px, 24vw, 180px);
+  display: grid;
+  place-items: center;
+  transition: opacity 200ms ease;
+}
+
+.request-panel__ad[hidden] {
+  opacity: 0;
+}
+
+.request-panel__ad-label {
+  margin: 0;
+  font-size: calc(0.7rem * var(--font-scale));
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+@media (min-width: 640px) {
+  .request-panel__content {
+    gap: calc(1.4rem * var(--spacing-scale));
+  }
+
+  .request-panel__actions {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+    align-items: center;
+  }
+
+  .request-panel__count {
+    justify-self: end;
+    text-align: right;
+  }
+}
+
 .card-grid {
   display: grid;
   gap: calc(1.1rem * var(--spacing-scale));
