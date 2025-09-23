@@ -44,6 +44,9 @@
           <button type="button" class="quick-nav__button" data-scroll-target="hero" aria-pressed="true">
             Overview
           </button>
+          <button type="button" class="quick-nav__button" data-scroll-target="request-box">
+            Request box
+          </button>
           <button type="button" class="quick-nav__button" data-scroll-target="open-stats">
             Open stats
           </button>
@@ -54,6 +57,48 @@
       </nav>
 
       <main class="main" id="content">
+        <section id="request-box" class="panel request-panel" aria-labelledby="request-panel-title">
+          <div class="panel__header">
+            <h2 id="request-panel-title" class="panel__title">Request Box</h2>
+            <span class="panel__subtitle"
+              >Submit your nickname, request an additional box, and keep track of your running total in real time.</span
+            >
+          </div>
+          <form id="request-box-form" class="request-form" autocomplete="on" novalidate>
+            <div class="request-form__field">
+              <label for="request-box-name">
+                Player name
+                <input
+                  type="text"
+                  id="request-box-name"
+                  name="request-box-name"
+                  inputmode="text"
+                  maxlength="80"
+                  placeholder="e.g. PlayerOne"
+                  autocomplete="name"
+                  required
+                />
+              </label>
+            </div>
+            <div class="request-form__actions">
+              <button type="submit" id="request-box-button" class="request-form__button">Request box</button>
+            </div>
+          </form>
+          <div class="request-status">
+            <p class="request-counter" aria-live="polite">
+              You currently have <strong id="request-box-count">0</strong> request boxes.
+            </p>
+            <p id="request-feedback" class="request-feedback" role="status" aria-live="assertive"></p>
+          </div>
+          <div
+            id="adsense-container"
+            class="adsense-container"
+            hidden
+            aria-live="polite"
+            aria-label="Sponsored message"
+          ></div>
+        </section>
+
         <section id="open-stats" class="panel" aria-labelledby="open-stats-title">
           <div class="panel__header">
             <h2 id="open-stats-title" class="panel__title">Open Stats</h2>
