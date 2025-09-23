@@ -1,0 +1,20 @@
+{
+  "rules": {
+    "requestBoxes": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": "auth != null && auth.uid === $uid",
+        ".validate": "newData.hasChildren(['count', 'name', 'updatedAt']) && newData.child('count').isNumber() && newData.child('count').val() >= 0 && newData.child('name').isString()"
+      }
+    },
+    "requestQueue": {
+      "$entryId": {
+        ".read": "auth != null",
+        ".write": "auth != null && newData.child('uid').val() === auth.uid",
+        ".validate": "newData.hasChildren(['name', 'uid', 'createdAt']) && newData.child('name').isString() && newData.child('uid').isString()"
+      }
+    },
+    ".read": false,
+    ".write": false
+  }
+}

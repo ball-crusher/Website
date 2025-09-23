@@ -1,3 +1,14 @@
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js';
+import {
+  getDatabase,
+  ref as databaseRef,
+  push,
+  serverTimestamp,
+  runTransaction,
+  onValue,
+} from 'https://www.gstatic.com/firebasejs/10.8.1/firebase-database.js';
+import { getAuth, onAuthStateChanged, signInAnonymously } from 'https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js';
+
 const DATA_URL = 'data/day_stats.json';
 
 const root = document.documentElement;
@@ -12,11 +23,43 @@ const quickNav = document.querySelector('.quick-nav');
 const quickNavButtons = quickNav
   ? Array.from(quickNav.querySelectorAll('.quick-nav__button'))
   : [];
+const requestBoxForm = document.getElementById('request-box-form');
+const requestBoxNameInput = document.getElementById('request-box-name');
+const requestBoxButton = document.getElementById('request-box-button');
+const requestBoxCountValue = document.getElementById('request-box-count-value');
+const requestBoxSuccessMessage = document.getElementById('request-box-success');
+const requestBoxErrorMessage = document.getElementById('request-box-error');
+const requestBoxAdContainer = document.getElementById('request-box-ad');
 
 const lastAppliedMetrics = {
   width: 0,
   height: 0,
   orientation: '',
+};
+
+const firebaseRequiredKeys = [
+  'apiKey',
+  'authDomain',
+  'databaseURL',
+  'projectId',
+  'storageBucket',
+  'messagingSenderId',
+  'appId',
+];
+
+let firebaseConfigCache = null;
+let firebaseInitializationError = null;
+let firebaseAppInstance = null;
+let firebaseDatabaseInstance = null;
+let firebaseAuthInstance = null;
+let firebaseAuthPromise = null;
+let firebaseCurrentUser = null;
+let requestBoxCountUnsubscribe = null;
+
+const requestBoxState = {
+  isSubmitting: false,
+  adRendered: false,
+  adsenseLoaderPromise: null,
 };
 
 let playerIndex = new Map();
@@ -29,6 +72,392 @@ let metricsFrameId = null;
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
+}
+
+// Reads and validates the Firebase configuration from the inline JSON script.
+function readFirebaseConfig() {
+  if (firebaseConfigCache) {
+    return firebaseConfigCache;
+  }
+
+  const configElement = document.getElementById('firebase-config');
+  if (!configElement) {
+    firebaseInitializationError = new Error(
+      'Firebase configuration is missing. Provide credentials in index.html to enable requests.',
+    );
+    return null;
+  }
+
+  try {
+    const parsedConfig = JSON.parse(configElement.textContent || '{}');
+    const containsPlaceholder = Object.values(parsedConfig).some(
+      (value) => typeof value === 'string' && /YOUR_FIREBASE/i.test(value),
+    );
+    const hasRequiredKeys = firebaseRequiredKeys.every(
+      (key) => typeof parsedConfig[key] === 'string' && parsedConfig[key].trim().length > 0,
+    );
+
+    if (!hasRequiredKeys || containsPlaceholder) {
+      firebaseInitializationError = new Error(
+        'Firebase configuration is incomplete. Update the placeholder values with real credentials.',
+      );
+      return null;
+    }
+
+    firebaseInitializationError = null;
+    firebaseConfigCache = parsedConfig;
+    return firebaseConfigCache;
+  } catch (error) {
+    firebaseInitializationError = error;
+    console.error('Unable to parse Firebase configuration JSON.', error);
+    return null;
+  }
+}
+
+// Lazily initialises the Firebase SDK components once the configuration is valid.
+function ensureFirebaseApp() {
+  if (firebaseAppInstance && firebaseDatabaseInstance && firebaseAuthInstance) {
+    return {
+      app: firebaseAppInstance,
+      db: firebaseDatabaseInstance,
+      auth: firebaseAuthInstance,
+    };
+  }
+
+  const config = readFirebaseConfig();
+  if (!config) {
+    throw firebaseInitializationError || new Error('Firebase configuration is not available.');
+  }
+
+  try {
+    firebaseAppInstance = initializeApp(config);
+    firebaseDatabaseInstance = getDatabase(firebaseAppInstance);
+    firebaseAuthInstance = getAuth(firebaseAppInstance);
+    return {
+      app: firebaseAppInstance,
+      db: firebaseDatabaseInstance,
+      auth: firebaseAuthInstance,
+    };
+  } catch (error) {
+    firebaseInitializationError = error;
+    console.error('Failed to initialise Firebase.', error);
+    throw error;
+  }
+}
+
+// Performs an anonymous authentication flow so every visitor gets a stable UID.
+function ensureAuthenticatedUser() {
+  if (firebaseCurrentUser) {
+    return Promise.resolve(firebaseCurrentUser);
+  }
+  if (firebaseAuthPromise) {
+    return firebaseAuthPromise;
+  }
+
+  let auth;
+  try {
+    ({ auth } = ensureFirebaseApp());
+  } catch (error) {
+    return Promise.reject(error);
+  }
+
+  firebaseAuthPromise = new Promise((resolve, reject) => {
+    const unsubscribe = onAuthStateChanged(
+      auth,
+      (user) => {
+        if (user) {
+          firebaseCurrentUser = user;
+          unsubscribe();
+          resolve(user);
+        }
+      },
+      (error) => {
+        unsubscribe();
+        reject(error);
+      },
+    );
+
+    signInAnonymously(auth).catch((error) => {
+      unsubscribe();
+      reject(error);
+    });
+  });
+
+  return firebaseAuthPromise;
+}
+
+// Reflects the currently known request-box count in the dedicated DOM element.
+function updateRequestBoxCountDisplay(count) {
+  if (!requestBoxCountValue) {
+    return;
+  }
+  const safeCount = Number.isFinite(count) && count >= 0 ? Math.floor(count) : 0;
+  requestBoxCountValue.textContent = String(safeCount);
+}
+
+// Shows an accessible error message right below the request box form.
+function showRequestBoxError(message) {
+  if (!requestBoxErrorMessage) {
+    return;
+  }
+  if (message) {
+    requestBoxErrorMessage.textContent = message;
+    requestBoxErrorMessage.hidden = false;
+  } else {
+    requestBoxErrorMessage.textContent = '';
+    requestBoxErrorMessage.hidden = true;
+  }
+  if (requestBoxSuccessMessage && message) {
+    requestBoxSuccessMessage.hidden = true;
+  }
+}
+
+// Shows the success banner while keeping the messaging consistent with errors.
+function showRequestBoxSuccess(message) {
+  if (!requestBoxSuccessMessage) {
+    return;
+  }
+  if (message) {
+    requestBoxSuccessMessage.textContent = message;
+    requestBoxSuccessMessage.hidden = false;
+  } else {
+    requestBoxSuccessMessage.textContent = '';
+    requestBoxSuccessMessage.hidden = true;
+  }
+}
+
+// Convenience helper that hides both success and error banners at once.
+function clearRequestBoxMessages() {
+  showRequestBoxError('');
+  showRequestBoxSuccess('');
+}
+
+// Subscribes to realtime updates for the authenticated user's request counter.
+function subscribeToRequestBoxCount(uid) {
+  if (!uid) {
+    return;
+  }
+
+  let db;
+  try {
+    ({ db } = ensureFirebaseApp());
+  } catch (error) {
+    showRequestBoxError('Firebase is not ready. Please try again later.');
+    return;
+  }
+
+  if (typeof requestBoxCountUnsubscribe === 'function') {
+    requestBoxCountUnsubscribe();
+    requestBoxCountUnsubscribe = null;
+  }
+
+  const userRef = databaseRef(db, `requestBoxes/${uid}`);
+  requestBoxCountUnsubscribe = onValue(
+    userRef,
+    (snapshot) => {
+      const data = snapshot.val();
+      const count = typeof data?.count === 'number' ? data.count : Number.parseInt(data?.count, 10);
+      updateRequestBoxCountDisplay(Number.isFinite(count) ? count : 0);
+    },
+    (error) => {
+      console.error('Realtime box count subscription failed.', error);
+      showRequestBoxError('Live updates are unavailable at the moment.');
+    },
+  );
+}
+
+// Normalises the entered display name to avoid double spaces and trailing whitespace.
+function sanitizeDisplayName(rawName) {
+  if (typeof rawName !== 'string') {
+    return '';
+  }
+  return rawName.replace(/\s+/g, ' ').trim();
+}
+
+// Injects the Google AdSense script only once and only after an explicit user action.
+async function ensureAdSenseScript(adClientId) {
+  if (window.adsbygoogle?.loaded) {
+    return;
+  }
+  if (!adClientId) {
+    throw new Error('AdSense client identifier is missing.');
+  }
+  if (requestBoxState.adsenseLoaderPromise) {
+    return requestBoxState.adsenseLoaderPromise;
+  }
+
+  const existingScript = document.querySelector('script[data-request-box-adsense="true"]');
+  if (existingScript) {
+    return;
+  }
+
+  requestBoxState.adsenseLoaderPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.async = true;
+    script.src = `https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${encodeURIComponent(
+      adClientId,
+    )}`;
+    script.crossOrigin = 'anonymous';
+    script.dataset.requestBoxAdsense = 'true';
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error('Failed to load Google AdSense.'));
+    document.head.append(script);
+  });
+
+  return requestBoxState.adsenseLoaderPromise;
+}
+
+// Renders the AdSense unit into the placeholder container after the SDK loads.
+async function displayAdSenseAd() {
+  if (!requestBoxAdContainer) {
+    return;
+  }
+
+  const adClientId = requestBoxAdContainer.dataset.adClient;
+  const adSlotId = requestBoxAdContainer.dataset.adSlot;
+
+  if (!adClientId || /X{3,}|YOUR/i.test(adClientId)) {
+    throw new Error('AdSense client is not configured.');
+  }
+
+  await ensureAdSenseScript(adClientId);
+
+  if (!requestBoxState.adRendered) {
+    const adElement = document.createElement('ins');
+    adElement.className = 'adsbygoogle';
+    adElement.style.display = 'block';
+    adElement.setAttribute('data-ad-client', adClientId);
+    if (adSlotId && !/^0+$/.test(adSlotId)) {
+      adElement.setAttribute('data-ad-slot', adSlotId);
+    }
+    adElement.setAttribute('data-ad-format', 'auto');
+    adElement.setAttribute('data-full-width-responsive', 'true');
+    requestBoxAdContainer.innerHTML = '';
+    requestBoxAdContainer.append(adElement);
+    requestBoxState.adRendered = true;
+  }
+
+  requestBoxAdContainer.hidden = false;
+  (window.adsbygoogle = window.adsbygoogle || []).push({});
+}
+
+// Handles the entire "Request Box" workflow: validation, database writes, ads, reload.
+async function handleRequestBoxSubmit(event) {
+  event.preventDefault();
+
+  if (requestBoxState.isSubmitting) {
+    return;
+  }
+
+  const name = sanitizeDisplayName(requestBoxNameInput?.value || '');
+  if (!name) {
+    showRequestBoxError('Please enter your name before requesting a box.');
+    requestBoxNameInput?.focus();
+    return;
+  }
+
+  if (!readFirebaseConfig()) {
+    showRequestBoxError(
+      'Request boxes are disabled because Firebase credentials are missing or invalid. Update the configuration first.',
+    );
+    return;
+  }
+
+  clearRequestBoxMessages();
+  requestBoxState.isSubmitting = true;
+
+  const originalButtonLabel = requestBoxButton?.textContent || 'Request Box';
+  if (requestBoxButton) {
+    requestBoxButton.disabled = true;
+    requestBoxButton.textContent = 'Submitting…';
+  }
+
+  try {
+    // Lazily initialise Firebase and make sure the visitor has a unique anonymous UID.
+    const { db } = ensureFirebaseApp();
+    const user = await ensureAuthenticatedUser();
+
+    // Run a transaction so the counter increments safely even with parallel requests.
+    const safeName = name.slice(0, 80);
+    const boxRef = databaseRef(db, `requestBoxes/${user.uid}`);
+
+    await runTransaction(boxRef, (currentData) => {
+      const currentCount = typeof currentData?.count === 'number' ? currentData.count : Number.parseInt(currentData?.count, 10) || 0;
+      return {
+        name: safeName,
+        count: currentCount + 1,
+        updatedAt: serverTimestamp(),
+      };
+    });
+
+    // Keep an audit trail of submissions, including a timestamp and anonymous UID.
+    const queueRef = databaseRef(db, 'requestQueue');
+    await push(queueRef, {
+      name: safeName,
+      uid: user.uid,
+      createdAt: serverTimestamp(),
+    });
+
+    // Only show a warning if the ad fails – the request itself already succeeded.
+    let adDisplayed = false;
+    try {
+      await displayAdSenseAd();
+      adDisplayed = true;
+    } catch (adError) {
+      console.warn('AdSense display issue:', adError);
+    }
+
+    const successMessage = adDisplayed
+      ? 'Your request was saved! Reloading shortly to refresh the ad experience…'
+      : 'Your request was saved, but the ad could not be loaded. Please verify the AdSense configuration.';
+    showRequestBoxSuccess(successMessage);
+
+    if (requestBoxButton) {
+      requestBoxButton.textContent = 'Requested!';
+    }
+
+    // Reload the page after a short delay so the UI picks up the new count immediately.
+    setTimeout(() => {
+      window.location.reload();
+    }, 3600);
+  } catch (error) {
+    console.error('Request box submission failed.', error);
+    showRequestBoxError(`We could not save your request. ${error.message || 'Please try again later.'}`);
+    if (requestBoxButton) {
+      requestBoxButton.disabled = false;
+      requestBoxButton.textContent = originalButtonLabel;
+    }
+  } finally {
+    requestBoxState.isSubmitting = false;
+  }
+}
+
+// Wires up the request box UI once the DOM nodes exist.
+function setupRequestBoxFeature() {
+  if (!requestBoxForm || !requestBoxButton || !requestBoxNameInput) {
+    return;
+  }
+
+  const config = readFirebaseConfig();
+  if (!config) {
+    requestBoxButton.disabled = true;
+    showRequestBoxError(
+      'Provide valid Firebase credentials to enable the Request Box workflow. The rest of the page remains available.',
+    );
+    return;
+  }
+
+  ensureAuthenticatedUser()
+    .then((user) => {
+      subscribeToRequestBoxCount(user.uid);
+    })
+    .catch((error) => {
+      console.error('Firebase authentication failed.', error);
+      showRequestBoxError('We could not connect to Firebase. Try again later.');
+      requestBoxButton.disabled = true;
+    });
+
+  requestBoxForm.addEventListener('submit', handleRequestBoxSubmit);
 }
 
 function resolveBoxCount(player) {
@@ -721,4 +1150,5 @@ playerSearchInput.addEventListener('input', () => {
 sortFieldSelect.addEventListener('change', () => currentPlayer && renderPlayerResults(currentPlayer));
 sortOrderSelect.addEventListener('change', () => currentPlayer && renderPlayerResults(currentPlayer));
 
+setupRequestBoxFeature();
 loadStats();

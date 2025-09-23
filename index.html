@@ -26,6 +26,47 @@
             <p class="hero__description">
               Here you can check your daily stats. This is just a pre-release version, so please be patient if you encounter any bugs — we’re working on fixing them soon!
             </p>
+            <section class="request-box" aria-labelledby="request-box-title">
+              <div class="request-box__header">
+                <h2 id="request-box-title" class="request-box__title">Request your box</h2>
+                <p class="request-box__description">
+                  Add your name to the daily queue, track how many boxes you have earned, and unlock a supporting ad with every request.
+                </p>
+              </div>
+              <form id="request-box-form" class="request-box__form" autocomplete="off" novalidate>
+                <label class="request-box__field" for="request-box-name">
+                  Your display name
+                  <input
+                    id="request-box-name"
+                    name="request-box-name"
+                    type="text"
+                    inputmode="text"
+                    maxlength="80"
+                    placeholder="e.g. PlayerLegend"
+                    required
+                  />
+                </label>
+                <button id="request-box-button" class="request-box__button" type="submit">
+                  Request Box
+                </button>
+              </form>
+              <div class="request-box__status" aria-live="polite">
+                <p class="request-box__count">
+                  You currently own
+                  <span id="request-box-count-value" class="request-box__count-value">0</span>
+                  boxes.
+                </p>
+                <p id="request-box-success" class="request-box__message request-box__message--success" hidden></p>
+                <p id="request-box-error" class="request-box__message request-box__message--error" hidden></p>
+              </div>
+              <div
+                id="request-box-ad"
+                class="request-box__ad"
+                data-ad-client="ca-pub-XXXXXXXXXXXXXXXX"
+                data-ad-slot="0000000000"
+                hidden
+              ></div>
+            </section>
           </div>
           <figure class="hero__visual">
             <canvas
@@ -109,6 +150,22 @@
       </footer>
     </div>
 
+    <!--
+      Replace the placeholder values below with your real Firebase project configuration.
+      The application detects if the placeholders are still present and keeps the request
+      workflow disabled until valid credentials are supplied.
+    -->
+    <script id="firebase-config" type="application/json">
+      {
+        "apiKey": "YOUR_FIREBASE_API_KEY",
+        "authDomain": "YOUR_FIREBASE_AUTH_DOMAIN",
+        "databaseURL": "YOUR_FIREBASE_DATABASE_URL",
+        "projectId": "YOUR_FIREBASE_PROJECT_ID",
+        "storageBucket": "YOUR_FIREBASE_STORAGE_BUCKET",
+        "messagingSenderId": "YOUR_FIREBASE_SENDER_ID",
+        "appId": "YOUR_FIREBASE_APP_ID"
+      }
+    </script>
     <script src="assets/js/app.js" type="module"></script>
   </body>
 </html>
