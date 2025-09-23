@@ -1,0 +1,17 @@
+{
+  "rules": {
+    ".read": true,
+    "requests": {
+      ".write": "auth != null",
+      "$requestId": {
+        ".validate": "newData.hasChildren(['name','key','requestedAt']) && newData.child('name').isString() && newData.child('name').val().length > 0 && newData.child('name').val().length <= 80 && newData.child('key').isString() && newData.child('key').val().length > 0 && newData.child('key').val().length <= 80 && newData.child('requestedAt').isNumber() && (!newData.hasChildren(['uid']) || newData.child('uid').isString())"
+      }
+    },
+    "boxCounts": {
+      ".write": "auth != null",
+      "$playerKey": {
+        ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 10000"
+      }
+    }
+  }
+}

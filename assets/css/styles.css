@@ -236,6 +236,162 @@ a:focus {
   backdrop-filter: blur(calc(18px * var(--elevation-scale)));
 }
 
+/*
+ * Dedicated styling for the request box panel so that the new workflow
+ * blends in with the existing design language while remaining easy to use
+ * on smaller displays. CSS variables keep the styling consistent with the
+ * theme and react gracefully to the dynamic viewport metrics applied via JS.
+ */
+.request-panel {
+  position: relative;
+  overflow: hidden;
+}
+
+.request-panel::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(circle at 20% 15%, rgba(56, 189, 248, 0.12), transparent 55%),
+    radial-gradient(circle at 80% -10%, rgba(14, 165, 233, 0.08), transparent 60%);
+  opacity: 0.9;
+}
+
+.request-panel > * {
+  position: relative;
+  z-index: 1;
+}
+
+.request-form {
+  display: grid;
+  gap: calc(1.1rem * var(--spacing-scale));
+}
+
+.request-form__actions {
+  display: flex;
+  align-items: stretch;
+}
+
+.request-form__field label {
+  display: grid;
+  gap: calc(0.35rem * var(--spacing-scale));
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.request-form__field input {
+  width: 100%;
+  padding: calc(0.8rem * var(--spacing-scale)) calc(1rem * var(--spacing-scale));
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(15, 23, 42, 0.65);
+  color: var(--text-primary);
+  font-size: calc(1rem * var(--font-scale));
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.request-form__field input:focus-visible {
+  outline: none;
+  border-color: rgba(56, 189, 248, 0.65);
+  box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.15);
+}
+
+.request-form__button {
+  appearance: none;
+  width: 100%;
+  padding: calc(0.85rem * var(--spacing-scale)) calc(1.4rem * var(--spacing-scale));
+  border-radius: 999px;
+  border: none;
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.3), rgba(6, 182, 212, 0.45));
+  color: var(--text-primary);
+  font-weight: 700;
+  font-size: calc(1rem * var(--font-scale));
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: transform 160ms ease, box-shadow 160ms ease, opacity 160ms ease;
+  box-shadow: 0 calc(18px * var(--elevation-scale)) calc(30px * var(--elevation-scale)) rgba(2, 6, 23, 0.45);
+}
+
+.request-form__button:hover,
+.request-form__button:focus-visible {
+  transform: translateY(-1px);
+  box-shadow: 0 calc(22px * var(--elevation-scale)) calc(36px * var(--elevation-scale)) rgba(2, 6, 23, 0.5);
+}
+
+.request-form__button:disabled {
+  cursor: wait;
+  opacity: 0.66;
+}
+
+.request-status {
+  display: grid;
+  gap: calc(0.6rem * var(--spacing-scale));
+  font-size: calc(0.95rem * var(--font-scale));
+  color: var(--text-secondary);
+}
+
+.request-counter strong {
+  color: var(--accent-strong);
+}
+
+.request-feedback {
+  margin: 0;
+  font-weight: 600;
+  min-height: calc(1.25rem * var(--font-scale));
+}
+
+.request-feedback.is-error {
+  color: #f87171;
+}
+
+.request-feedback.is-success {
+  color: #4ade80;
+}
+
+.adsense-container {
+  border-radius: var(--radius-md);
+  border: 1px dashed rgba(56, 189, 248, 0.35);
+  background: rgba(8, 15, 35, 0.6);
+  padding: calc(1rem * var(--spacing-scale));
+  min-height: calc(5rem * var(--spacing-scale));
+  display: grid;
+  align-items: center;
+  justify-items: center;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: calc(0.85rem * var(--font-scale));
+  gap: calc(0.75rem * var(--spacing-scale));
+}
+
+.adsense-container::before {
+  content: 'Advertisement';
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-weight: 600;
+  color: rgba(148, 163, 184, 0.7);
+}
+
+.adsense-container .adsbygoogle {
+  width: 100%;
+}
+
+.adsense-placeholder {
+  margin: 0;
+  color: rgba(241, 245, 249, 0.72);
+  font-size: calc(0.78rem * var(--font-scale));
+}
+
+@media (min-width: 640px) {
+  .request-form {
+    grid-template-columns: 1fr auto;
+    align-items: end;
+  }
+
+  .request-form__actions {
+    min-width: calc(11rem * var(--spacing-scale));
+  }
+}
+
 .panel__header {
   display: grid;
   gap: calc(0.55rem * var(--spacing-scale));
