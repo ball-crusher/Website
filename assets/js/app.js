@@ -1,3 +1,21 @@
+// Firebase and AdSense are only loaded once the browser needs them. We rely on
+// the official v9 modular SDK so that tree-shaking keeps the bundle minimal.
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/9.22.2/firebase-app.js';
+import {
+  getDatabase,
+  ref,
+  onValue,
+  runTransaction,
+  set,
+  push,
+  serverTimestamp,
+} from 'https://www.gstatic.com/firebasejs/9.22.2/firebase-database.js';
+import {
+  getAuth,
+  onAuthStateChanged,
+  signInAnonymously,
+} from 'https://www.gstatic.com/firebasejs/9.22.2/firebase-auth.js';
+
 const DATA_URL = 'data/day_stats.json';
 
 const root = document.documentElement;
@@ -12,6 +30,426 @@ const quickNav = document.querySelector('.quick-nav');
 const quickNavButtons = quickNav
   ? Array.from(quickNav.querySelectorAll('.quick-nav__button'))
   : [];
+const requestPlayerNameInput = document.getElementById('request-player-name');
+const requestBoxButton = document.getElementById('request-box-button');
+const requestBoxCountLabel = document.getElementById('request-box-count');
+const requestBoxStatus = document.getElementById('request-box-status');
+const requestAdSlot = document.getElementById('request-ad-slot');
+
+// Read configuration details from the dedicated script tags. Keeping the
+// parsing logic in one place prevents repetitive try/catch blocks.
+function readEmbeddedJsonConfig(elementId) {
+  const element = document.getElementById(elementId);
+  if (!element) {
+    return null;
+  }
+  try {
+    return JSON.parse(element.textContent || '{}');
+  } catch (error) {
+    console.error(`Failed to parse configuration for ${elementId}`, error);
+    return null;
+  }
+}
+
+const firebaseConfig = readEmbeddedJsonConfig('firebase-config');
+const adsenseConfig = readEmbeddedJsonConfig('adsense-config');
+
+let firebaseApp = null;
+let firebaseDatabase = null;
+let firebaseAuthInstance = null;
+let firebaseSetupPromise = null;
+let firebaseAuthPromise = null;
+let firebaseInitError = null;
+let currentFirebaseUser = null;
+let boxCountUnsubscribe = null;
+let trackedBoxKey = null;
+let adsenseScriptInjected = false;
+
+// ---------------------------------------------------------------------------
+// Firebase helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Normalizes the free-form player name field and keeps the value compact so
+ * that it can be used inside Firebase document paths without bloating keys.
+ */
+function sanitizePlayerName(rawName) {
+  if (typeof rawName !== 'string') {
+    return '';
+  }
+  return rawName.trim().replace(/\s+/g, ' ').slice(0, 40);
+}
+
+/**
+ * Converts a human readable player name into a Realtime Database friendly key.
+ * All non alpha numeric characters are collapsed into underscores to prevent
+ * structural issues with the database paths.
+ */
+function deriveDatabaseKey(rawName) {
+  const sanitized = sanitizePlayerName(rawName);
+  if (!sanitized) {
+    return '';
+  }
+  return sanitized
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+/**
+ * Updates the status helper paragraph under the request form. The status is
+ * shared by validation messages, network errors, and success notifications.
+ */
+function setRequestStatus(message, { isError = false } = {}) {
+  if (!requestBoxStatus) {
+    return;
+  }
+  requestBoxStatus.textContent = message || '';
+  requestBoxStatus.classList.toggle('request-panel__status--error', Boolean(isError));
+}
+
+/**
+ * Renders the current number of boxes the user owns. The label is resilient
+ * against missing values and shows contextual helper text when required.
+ */
+function updateRequestCountLabel(count, { name, isLoading = false } = {}) {
+  if (!requestBoxCountLabel) {
+    return;
+  }
+  const safeName = sanitizePlayerName(name || requestPlayerNameInput?.value || '');
+  if (isLoading) {
+    requestBoxCountLabel.textContent = safeName
+      ? `Fetching boxes for ${safeName}…`
+      : 'Fetching your boxes…';
+    return;
+  }
+  if (typeof count === 'number' && Number.isFinite(count)) {
+    const label = safeName ? `${safeName} has` : 'You currently have';
+    const suffix = count === 1 ? ' box.' : ' boxes.';
+    requestBoxCountLabel.textContent = `${label} ${count} ${suffix}`;
+    return;
+  }
+  if (safeName) {
+    requestBoxCountLabel.textContent = `No boxes recorded yet for ${safeName}.`;
+    return;
+  }
+  requestBoxCountLabel.textContent = 'Enter your player name to see your boxes.';
+}
+
+/**
+ * Resets the real-time listener when the user changes the tracked name or the
+ * form is cleared. This prevents multiple `onValue` subscriptions from stacking
+ * up and leaking memory.
+ */
+function stopListeningForBoxCount() {
+  if (typeof boxCountUnsubscribe === 'function') {
+    boxCountUnsubscribe();
+  }
+  boxCountUnsubscribe = null;
+  trackedBoxKey = null;
+}
+
+/**
+ * Watches the live count for the provided player. Any change in Firebase is
+ * immediately reflected in the UI, enabling a "live" experience when the
+ * button increments the total boxes.
+ */
+function startListeningForBoxCount(name) {
+  if (!firebaseDatabase) {
+    return;
+  }
+  const key = deriveDatabaseKey(name);
+  if (!key) {
+    stopListeningForBoxCount();
+    updateRequestCountLabel(Number.NaN, { name });
+    return;
+  }
+  if (trackedBoxKey === key) {
+    return;
+  }
+  stopListeningForBoxCount();
+  const boxRef = ref(firebaseDatabase, `boxCounts/${key}`);
+  boxCountUnsubscribe = onValue(
+    boxRef,
+    (snapshot) => {
+      const value = snapshot.val();
+      const boxes = typeof value === 'number' && Number.isFinite(value) ? value : 0;
+      updateRequestCountLabel(boxes, { name });
+    },
+    (error) => {
+      console.error('Failed to read box count', error);
+      setRequestStatus('Box count could not be loaded. Please try again later.', { isError: true });
+    },
+  );
+  trackedBoxKey = key;
+}
+
+/**
+ * Ensures that the visitor has an authenticated Firebase session. Anonymous
+ * auth is used so that security rules can still gate writes to trusted users.
+ */
+function ensureAuthSession() {
+  if (!firebaseAuthInstance) {
+    return Promise.reject(new Error('Firebase Auth is not available.'));
+  }
+  if (firebaseAuthInstance.currentUser) {
+    currentFirebaseUser = firebaseAuthInstance.currentUser;
+    return Promise.resolve(currentFirebaseUser);
+  }
+  if (firebaseAuthPromise) {
+    return firebaseAuthPromise;
+  }
+  firebaseAuthPromise = new Promise((resolve, reject) => {
+    const unsubscribe = onAuthStateChanged(
+      firebaseAuthInstance,
+      (user) => {
+        if (user) {
+          currentFirebaseUser = user;
+          unsubscribe();
+          resolve(user);
+        }
+      },
+      (error) => {
+        unsubscribe();
+        firebaseAuthPromise = null;
+        reject(error);
+      },
+    );
+    signInAnonymously(firebaseAuthInstance).catch((error) => {
+      unsubscribe();
+      firebaseAuthPromise = null;
+      reject(error);
+    });
+  });
+  return firebaseAuthPromise;
+}
+
+/**
+ * Boots the Firebase SDK using the injected configuration. The promise is
+ * cached to avoid duplicate initialization calls when multiple UI components
+ * request a connection simultaneously.
+ */
+function ensureFirebaseReady() {
+  if (firebaseInitError) {
+    return Promise.reject(firebaseInitError);
+  }
+  if (firebaseSetupPromise) {
+    return firebaseSetupPromise;
+  }
+  if (!firebaseConfig || !firebaseConfig.apiKey) {
+    firebaseInitError = new Error('Firebase configuration is missing.');
+    return Promise.reject(firebaseInitError);
+  }
+  firebaseSetupPromise = (async () => {
+    firebaseApp = initializeApp(firebaseConfig);
+    firebaseDatabase = getDatabase(firebaseApp);
+    firebaseAuthInstance = getAuth(firebaseApp);
+    await ensureAuthSession();
+    return firebaseDatabase;
+  })().catch((error) => {
+    firebaseInitError = error;
+    throw error;
+  });
+  return firebaseSetupPromise;
+}
+
+/**
+ * Persists the request details to Firebase, increments the box counter via a
+ * transaction, and writes both the summary and the history records.
+ */
+async function submitRequestBox(name) {
+  if (!firebaseDatabase) {
+    throw new Error('Firebase is not ready.');
+  }
+  const key = deriveDatabaseKey(name);
+  if (!key) {
+    throw new Error('Bitte gib deinen Spielernamen ein.');
+  }
+
+  const normalizedName = sanitizePlayerName(name);
+  const now = Date.now();
+  const boxRef = ref(firebaseDatabase, `boxCounts/${key}`);
+  const playerRef = ref(firebaseDatabase, `players/${key}`);
+  const historyCollectionRef = ref(firebaseDatabase, `playerRequests/${key}`);
+
+  const transactionResult = await runTransaction(boxRef, (current) => {
+    if (typeof current === 'number' && Number.isFinite(current) && current >= 0) {
+      return current + 1;
+    }
+    return 1;
+  });
+
+  // When the transaction aborts (rare but possible) we surface a user-friendly
+  // error so that the caller can retry.
+  if (!transactionResult.committed) {
+    throw new Error('The request could not be saved. Please try again.');
+  }
+
+  const snapshotValue =
+    typeof transactionResult.snapshot?.val === 'function'
+      ? transactionResult.snapshot.val()
+      : null;
+  const totalBoxes = typeof snapshotValue === 'number' && Number.isFinite(snapshotValue) ? snapshotValue : 1;
+
+  await set(playerRef, {
+    name: normalizedName,
+    lastRequestAt: serverTimestamp(),
+    lastRequestAtMillis: now,
+    totalBoxes,
+    lastRequesterUid: currentFirebaseUser ? currentFirebaseUser.uid : null,
+  });
+
+  const historyEntryRef = push(historyCollectionRef);
+  await set(historyEntryRef, {
+    requestedAt: serverTimestamp(),
+    requestedAtMillis: now,
+    requestedBy: currentFirebaseUser ? currentFirebaseUser.uid : null,
+  });
+
+  return totalBoxes;
+}
+
+/**
+ * Injects the Google AdSense tag on demand. Ads are only requested after the
+ * user interacts with the request button to comply with policy requirements.
+ */
+function displayAdSense() {
+  if (!requestAdSlot) {
+    return;
+  }
+  requestAdSlot.hidden = false;
+  requestAdSlot.removeAttribute('aria-hidden');
+  requestAdSlot.innerHTML = '';
+
+  if (!adsenseConfig || !adsenseConfig.adClient || !adsenseConfig.adSlot) {
+    const placeholder = document.createElement('p');
+    placeholder.className = 'request-panel__ad-label';
+    placeholder.textContent = 'Add your Google AdSense client and slot IDs to display an advert here.';
+    requestAdSlot.append(placeholder);
+    setRequestStatus('Google AdSense configuration missing. Update the adsense-config block.', {
+      isError: true,
+    });
+    return;
+  }
+
+  const adContainer = document.createElement('ins');
+  adContainer.className = 'adsbygoogle';
+  adContainer.style.display = 'block';
+  adContainer.setAttribute('data-ad-client', adsenseConfig.adClient);
+  adContainer.setAttribute('data-ad-slot', adsenseConfig.adSlot);
+  adContainer.setAttribute('data-ad-format', 'auto');
+  adContainer.setAttribute('data-full-width-responsive', 'true');
+  requestAdSlot.append(adContainer);
+
+  const pushAd = () => {
+    window.adsbygoogle = window.adsbygoogle || [];
+    try {
+      window.adsbygoogle.push({});
+    } catch (error) {
+      console.error('AdSense push failed', error);
+    }
+  };
+
+  if (!adsenseScriptInjected) {
+    const script = document.createElement('script');
+    script.async = true;
+    script.src = `https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${encodeURIComponent(
+      adsenseConfig.adClient,
+    )}`;
+    script.crossOrigin = 'anonymous';
+    script.dataset.adsbygoogleLoaded = 'true';
+    script.onload = pushAd;
+    script.onerror = () => {
+      adsenseScriptInjected = false;
+      setRequestStatus('Die Anzeige konnte nicht geladen werden. Bitte versuche es später erneut.', {
+        isError: true,
+      });
+    };
+    document.head.appendChild(script);
+    adsenseScriptInjected = true;
+  } else {
+    pushAd();
+  }
+}
+
+/**
+ * Handles the "Request box" button. Validation, Firebase coordination, AdSense
+ * rendering, and the final page refresh are orchestrated in this handler.
+ */
+async function handleRequestBoxClick() {
+  if (!requestPlayerNameInput) {
+    return;
+  }
+  const name = sanitizePlayerName(requestPlayerNameInput.value);
+  if (!name) {
+    setRequestStatus('Bitte gib zuerst deinen Spielernamen ein.', { isError: true });
+    requestPlayerNameInput.focus();
+    return;
+  }
+
+  if (requestBoxButton) {
+    requestBoxButton.disabled = true;
+  }
+  setRequestStatus('Sending your request…');
+
+  try {
+    await ensureFirebaseReady();
+    const totalBoxes = await submitRequestBox(name);
+    updateRequestCountLabel(totalBoxes, { name });
+    setRequestStatus('Box requested successfully!');
+    displayAdSense();
+    setTimeout(() => {
+      window.location.reload();
+    }, 1800);
+  } catch (error) {
+    console.error('Request box failed', error);
+    let message =
+      error?.message || 'Wir konnten deine Anfrage leider nicht speichern. Bitte versuche es später erneut.';
+    if (error?.code === 'auth/operation-not-allowed') {
+      message =
+        'Anonymous authentication is disabled for this project. Enable it in Firebase Auth or adjust the rules.';
+    } else if (error?.code === 'auth/network-request-failed') {
+      message = 'Keine Verbindung zur Firebase-Datenbank. Prüfe deine Internetverbindung und versuche es erneut.';
+    }
+    setRequestStatus(message, { isError: true });
+    if (requestBoxButton) {
+      requestBoxButton.disabled = false;
+    }
+  }
+}
+
+/**
+ * Reacts to changes in the player name field. The live counter is only
+ * activated when a non-empty value is present to avoid unnecessary listeners.
+ */
+function handleRequestNameChange() {
+  if (!requestPlayerNameInput) {
+    return;
+  }
+  setRequestStatus('');
+  const name = sanitizePlayerName(requestPlayerNameInput.value);
+  if (!name) {
+    stopListeningForBoxCount();
+    updateRequestCountLabel(Number.NaN, {});
+    return;
+  }
+  updateRequestCountLabel(Number.NaN, { name, isLoading: true });
+  ensureFirebaseReady()
+    .then(() => {
+      startListeningForBoxCount(name);
+    })
+    .catch((error) => {
+      console.error('Firebase initialization failed', error);
+      let message = 'Firebase konnte nicht initialisiert werden. Prüfe deine Konfiguration.';
+      if (error?.code === 'auth/operation-not-allowed') {
+        message =
+          'Aktiviere anonyme Anmeldung in Firebase Auth, damit die Box-Anfragen gespeichert werden können.';
+      }
+      setRequestStatus(message, {
+        isError: true,
+      });
+    });
+}
 
 const lastAppliedMetrics = {
   width: 0,
@@ -720,5 +1158,28 @@ playerSearchInput.addEventListener('input', () => {
 });
 sortFieldSelect.addEventListener('change', () => currentPlayer && renderPlayerResults(currentPlayer));
 sortOrderSelect.addEventListener('change', () => currentPlayer && renderPlayerResults(currentPlayer));
+
+if (requestBoxButton) {
+  requestBoxButton.addEventListener('click', handleRequestBoxClick);
+}
+
+if (requestPlayerNameInput) {
+  requestPlayerNameInput.addEventListener('input', handleRequestNameChange);
+  requestPlayerNameInput.addEventListener('change', handleRequestNameChange);
+  handleRequestNameChange();
+}
+
+if (!firebaseConfig || !firebaseConfig.apiKey) {
+  setRequestStatus('Firebase-Konfiguration fehlt. Ergänze deine Schlüssel, um Boxen anzufordern.', {
+    isError: true,
+  });
+} else {
+  ensureFirebaseReady().catch((error) => {
+    console.error('Initial Firebase bootstrap failed', error);
+    setRequestStatus('Firebase konnte nicht initialisiert werden. Prüfe deine Einstellungen.', {
+      isError: true,
+    });
+  });
+}
 
 loadStats();
