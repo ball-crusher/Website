@@ -12,6 +12,60 @@ const quickNav = document.querySelector('.quick-nav');
 const quickNavButtons = quickNav
   ? Array.from(quickNav.querySelectorAll('.quick-nav__button'))
   : [];
+const extraBoxSection = document.getElementById('extra-box');
+const extraBoxForm = document.getElementById('extra-box-form');
+const extraBoxInput = document.getElementById('extra-box-name');
+const extraBoxStatus = document.getElementById('extra-box-status');
+const extraBoxSummary = document.getElementById('extra-box-summary');
+const extraBoxTotal = document.getElementById('extra-box-total');
+const extraBoxDaily = document.getElementById('extra-box-daily');
+const extraBoxRequestButton = document.getElementById('extra-box-request');
+const extraBoxRewardedWrapper = document.getElementById('extra-box-rewarded');
+const extraBoxRewardedInner = document.getElementById('extra-box-rewarded-inner');
+const extraBoxBannerSlots = Array.from(document.querySelectorAll('.extra-box__banner'));
+const extraBoxSubmitButton = extraBoxForm?.querySelector('.extra-box__submit') || null;
+
+//
+// Extra box configuration bootstrap
+// ---------------------------------
+// The HTML exposes a window.EXTRA_BOX_CONFIG object. We normalise and validate
+// it here so the rest of the module can work with predictable defaults.
+// Keeping this logic centralised also prevents accidentally shipping
+// placeholder configuration to production.
+//
+const extraBoxSettings = (() => {
+  const raw = window.EXTRA_BOX_CONFIG || {};
+  const firebaseConfig = raw.firebaseConfig && typeof raw.firebaseConfig === 'object' ? raw.firebaseConfig : null;
+  const googleAds = raw.googleAds && typeof raw.googleAds === 'object' ? raw.googleAds : {};
+  const firestoreCollection = typeof raw.firestoreCollection === 'string' && raw.firestoreCollection.trim()
+    ? raw.firestoreCollection.trim()
+    : 'extraBoxes';
+  return { firebaseConfig, googleAds, firestoreCollection };
+})();
+
+// Utility to detect placeholder strings (e.g. "YOUR_FIREBASE_API_KEY").
+function isPlaceholderValue(value) {
+  if (typeof value !== 'string') {
+    return false;
+  }
+  return /YOUR_|XXXXXXXXXXXXXXXX|REWARDED_SLOT_ID|BANNER_(TOP|BOTTOM)_SLOT_ID/i.test(value);
+}
+
+const hasFirebaseConfig = Boolean(
+  extraBoxSettings.firebaseConfig &&
+    !['apiKey', 'projectId', 'appId'].some((key) => !extraBoxSettings.firebaseConfig?.[key] || isPlaceholderValue(extraBoxSettings.firebaseConfig[key])),
+);
+
+const googleAdsSettings = {
+  publisherId: extraBoxSettings.googleAds?.publisherId || '',
+  rewardedUnitId: extraBoxSettings.googleAds?.rewardedUnitId || '',
+  bannerUnitIds: Array.isArray(extraBoxSettings.googleAds?.bannerUnitIds)
+    ? extraBoxSettings.googleAds.bannerUnitIds
+    : [],
+};
+
+const hasGooglePublisherId = Boolean(googleAdsSettings.publisherId && !isPlaceholderValue(googleAdsSettings.publisherId));
+const hasRewardedAdUnit = Boolean(googleAdsSettings.rewardedUnitId && !isPlaceholderValue(googleAdsSettings.rewardedUnitId));
 
 const lastAppliedMetrics = {
   width: 0,
@@ -26,6 +80,11 @@ let canvasAnimationId = null;
 let canvasResizeHandler = null;
 let quickNavObserver = null;
 let metricsFrameId = null;
+let extraBoxLatestDay = null;
+let extraBoxState = null;
+let firestoreInitPromise = null;
+let extraBoxInitialized = false;
+const extraBoxCache = new Map();
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -246,6 +305,8 @@ function initialize(dayStats) {
   renderOpenStats(sortedDays);
   buildPlayerIndex(sortedDays);
   populatePlayerSuggestions();
+  extraBoxLatestDay = sortedDays.length ? sortedDays[0].day : null;
+  setupExtraBox();
   startCanvasAnimation();
 }
 
@@ -702,6 +763,357 @@ function buildInstagramLink(name) {
   if (!name) return '#';
   const sanitized = name.replace(/[^a-z0-9._-]/gi, '');
   return `https://instagram.com/${sanitized}`;
+}
+
+//
+// Extra Box helpers and lifecycle
+// -------------------------------
+// The functions below orchestrate the Firebase lookup + Google Ads rewarded flow
+// for the "Extra Box" panel. Everything is heavily commented so you can plug in
+// real credentials and ads scripts without reverse-engineering the behaviour.
+//
+
+function annotateExtraBoxBannerSlots() {
+  if (!extraBoxBannerSlots.length) {
+    return;
+  }
+
+  extraBoxBannerSlots.forEach((slot) => {
+    const index = Number.parseInt(slot.dataset.adSlotIndex || '', 10);
+    const adUnitId = Number.isInteger(index) ? googleAdsSettings.bannerUnitIds?.[index] : null;
+    const placeholder = slot.querySelector('.extra-box__banner-placeholder');
+
+    if (adUnitId && !isPlaceholderValue(adUnitId)) {
+      slot.dataset.adUnitId = adUnitId;
+      if (placeholder) {
+        placeholder.textContent = `Google Ad slot: ${adUnitId}`;
+      }
+    } else if (placeholder) {
+      placeholder.textContent = 'Ad banner placeholder – set bannerUnitIds in EXTRA_BOX_CONFIG';
+    }
+  });
+}
+
+function injectGoogleAdsScript() {
+  if (!hasGooglePublisherId) {
+    return;
+  }
+  const existing = document.querySelector('script[data-extra-box-ads]');
+  if (existing) {
+    return;
+  }
+  const script = document.createElement('script');
+  script.async = true;
+  script.src = `https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${encodeURIComponent(
+    googleAdsSettings.publisherId,
+  )}`;
+  script.crossOrigin = 'anonymous';
+  script.dataset.extraBoxAds = 'true';
+  document.head.append(script);
+}
+
+function renderExtraBoxStatus(message, tone = 'info') {
+  if (!extraBoxStatus) {
+    return;
+  }
+  extraBoxStatus.textContent = message || '';
+  if (tone === 'info') {
+    extraBoxStatus.removeAttribute('data-tone');
+  } else {
+    extraBoxStatus.dataset.tone = tone;
+  }
+}
+
+function renderExtraBoxSummary(state) {
+  if (!extraBoxSummary || !extraBoxTotal || !extraBoxDaily) {
+    return;
+  }
+  if (!state) {
+    extraBoxSummary.hidden = true;
+    extraBoxTotal.textContent = '';
+    extraBoxDaily.textContent = '';
+    return;
+  }
+
+  const totalLabel = state.totalBoxes === 1 ? 'box' : 'boxes';
+  extraBoxTotal.textContent = `${state.name} currently owns ${state.totalBoxes} extra ${totalLabel}.`;
+
+  if (typeof extraBoxLatestDay === 'number') {
+    const dailyLabel = state.dailyCount === 1 ? 'box' : 'boxes';
+    extraBoxDaily.textContent = `Extra boxes for Day ${extraBoxLatestDay}: ${state.dailyCount} ${dailyLabel}.`;
+  } else {
+    extraBoxDaily.textContent = 'Latest day not available – verify the JSON feed.';
+  }
+
+  extraBoxSummary.hidden = false;
+}
+
+function sanitizePlayerKey(name) {
+  const normalized = name.trim().toLowerCase();
+  const cleaned = normalized.replace(/[^a-z0-9._-]/g, '');
+  return cleaned || encodeURIComponent(normalized) || 'anonymous';
+}
+
+async function resolveFirestore() {
+  if (!hasFirebaseConfig) {
+    throw new Error('Firebase configuration missing. Update window.EXTRA_BOX_CONFIG.');
+  }
+  if (!firestoreInitPromise) {
+    firestoreInitPromise = (async () => {
+      const [{ initializeApp }, firestoreModule] = await Promise.all([
+        import('https://www.gstatic.com/firebasejs/10.12.4/firebase-app.js'),
+        import('https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js'),
+      ]);
+      const app = initializeApp(extraBoxSettings.firebaseConfig);
+      const db = firestoreModule.getFirestore(app);
+      return { db, firestoreModule };
+    })();
+  }
+  return firestoreInitPromise;
+}
+
+async function fetchExtraBoxSnapshot(playerName) {
+  const cacheKey = sanitizePlayerKey(playerName);
+  if (extraBoxCache.has(cacheKey)) {
+    return extraBoxCache.get(cacheKey);
+  }
+
+  const { db, firestoreModule } = await resolveFirestore();
+  const { doc, getDoc } = firestoreModule;
+  const docRef = doc(db, extraBoxSettings.firestoreCollection, cacheKey);
+  const snapshot = await getDoc(docRef);
+
+  if (!snapshot.exists()) {
+    const fallback = { name: playerName, totalBoxes: 0, dailyCount: 0, cacheKey };
+    extraBoxCache.set(cacheKey, fallback);
+    return fallback;
+  }
+
+  const data = snapshot.data() || {};
+  const totalBoxes = typeof data.totalBoxes === 'number' ? data.totalBoxes : 0;
+  const dailyMap = data.daily && typeof data.daily === 'object' ? data.daily : {};
+  const dayKey = typeof extraBoxLatestDay === 'number' ? String(extraBoxLatestDay) : null;
+  const dailyCount = dayKey && typeof dailyMap[dayKey] === 'number' ? dailyMap[dayKey] : 0;
+
+  const result = {
+    name: data.name || playerName,
+    totalBoxes,
+    dailyCount,
+    cacheKey,
+  };
+  extraBoxCache.set(cacheKey, result);
+  return result;
+}
+
+async function incrementExtraBoxForDay(playerName) {
+  const { db, firestoreModule } = await resolveFirestore();
+  const { doc, runTransaction, serverTimestamp } = firestoreModule;
+  const cacheKey = sanitizePlayerKey(playerName);
+  const docRef = doc(db, extraBoxSettings.firestoreCollection, cacheKey);
+  const dayKey = typeof extraBoxLatestDay === 'number' ? String(extraBoxLatestDay) : 'unknown';
+
+  const result = await runTransaction(db, async (transaction) => {
+    const snapshot = await transaction.get(docRef);
+    const existing = snapshot.exists() ? snapshot.data() || {} : {};
+    const safeDaily = existing.daily && typeof existing.daily === 'object' ? { ...existing.daily } : {};
+    const newTotal = (typeof existing.totalBoxes === 'number' ? existing.totalBoxes : 0) + 1;
+    const newDaily = (typeof safeDaily[dayKey] === 'number' ? safeDaily[dayKey] : 0) + 1;
+    safeDaily[dayKey] = newDaily;
+
+    const payload = {
+      name: playerName,
+      totalBoxes: newTotal,
+      daily: safeDaily,
+      updatedAt: serverTimestamp(),
+    };
+
+    if (!snapshot.exists()) {
+      payload.createdAt = serverTimestamp();
+    }
+
+    transaction.set(docRef, payload, { merge: true });
+    return { totalBoxes: newTotal, dailyCount: newDaily };
+  });
+
+  const cached = extraBoxCache.get(cacheKey) || { name: playerName };
+  const updatedCache = { ...cached, name: playerName, totalBoxes: result.totalBoxes, dailyCount: result.dailyCount, cacheKey };
+  extraBoxCache.set(cacheKey, updatedCache);
+  return updatedCache;
+}
+
+async function showRewardedAd() {
+  if (!extraBoxRewardedWrapper || !extraBoxRewardedInner) {
+    return true;
+  }
+
+  extraBoxRewardedWrapper.hidden = false;
+  extraBoxRewardedInner.innerHTML = '<p class="extra-box__rewarded-copy">Preparing rewarded ad…</p>';
+
+  try {
+    if (typeof window.extraBoxShowRewardedAd === 'function') {
+      const outcome = await window.extraBoxShowRewardedAd({
+        unitId: googleAdsSettings.rewardedUnitId,
+        container: extraBoxRewardedInner,
+        hasConfiguredUnit: hasRewardedAdUnit,
+      });
+      const completed = typeof outcome === 'object' ? outcome?.completed !== false : outcome !== false;
+      return completed;
+    }
+
+    // Without a custom implementation we simulate the ad so the flow keeps working during development.
+    renderExtraBoxStatus('Simulating rewarded ad. Configure Google Ads to replace this placeholder.', 'info');
+    await simulateRewardedAd();
+    return true;
+  } finally {
+    extraBoxRewardedWrapper.hidden = true;
+    extraBoxRewardedInner.innerHTML = '<p class="extra-box__rewarded-copy">Loading rewarded ad…</p>';
+  }
+}
+
+function simulateRewardedAd() {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 3500);
+  });
+}
+
+async function handleExtraBoxSubmit(event) {
+  event.preventDefault();
+  if (!extraBoxInput) {
+    return;
+  }
+
+  const name = extraBoxInput.value.trim();
+  if (!name) {
+    renderExtraBoxStatus('Please enter a player name first.', 'error');
+    renderExtraBoxSummary(null);
+    extraBoxRequestButton && (extraBoxRequestButton.disabled = true);
+    return;
+  }
+
+  if (!hasFirebaseConfig) {
+    renderExtraBoxStatus('Firebase is not configured yet. Update window.EXTRA_BOX_CONFIG before using this feature.', 'error');
+    extraBoxRequestButton && (extraBoxRequestButton.disabled = true);
+    return;
+  }
+
+  try {
+    renderExtraBoxStatus('Loading data from Firebase…');
+    const snapshot = await fetchExtraBoxSnapshot(name);
+    extraBoxState = snapshot;
+    renderExtraBoxSummary(snapshot);
+    if (extraBoxRequestButton) {
+      extraBoxRequestButton.disabled = false;
+    }
+
+    if (snapshot.totalBoxes === 0 && snapshot.dailyCount === 0) {
+      renderExtraBoxStatus('No extra boxes yet. Request one below to start your streak!', 'info');
+    } else {
+      renderExtraBoxStatus('You are all set. Watch the rewarded ad to request another box.', 'success');
+    }
+  } catch (error) {
+    console.error('Failed to fetch extra box data', error);
+    renderExtraBoxStatus('Could not connect to Firebase. Check your credentials and Firestore rules.', 'error');
+    if (extraBoxRequestButton) {
+      extraBoxRequestButton.disabled = true;
+    }
+  }
+}
+
+async function handleRequestBoxClick() {
+  if (!extraBoxState || !extraBoxState.name) {
+    renderExtraBoxStatus('Look up your player name first.', 'error');
+    return;
+  }
+
+  if (!hasFirebaseConfig) {
+    renderExtraBoxStatus('Firebase configuration missing. Cannot request an extra box.', 'error');
+    return;
+  }
+
+  if (extraBoxRequestButton) {
+    extraBoxRequestButton.disabled = true;
+  }
+
+  renderExtraBoxStatus('Preparing your rewarded ad…');
+
+  try {
+    const completed = await showRewardedAd();
+    if (!completed) {
+      renderExtraBoxStatus('The ad was closed early. Watch the full ad to earn a box.', 'error');
+      if (extraBoxRequestButton) {
+        extraBoxRequestButton.disabled = false;
+      }
+      return;
+    }
+
+    const updated = await incrementExtraBoxForDay(extraBoxState.name);
+    extraBoxState = updated;
+    renderExtraBoxSummary(updated);
+    renderExtraBoxStatus('Extra box granted! Reloading to rotate ads…', 'success');
+
+    setTimeout(() => {
+      window.location.reload();
+    }, 2200);
+  } catch (error) {
+    console.error('Failed to request extra box', error);
+    renderExtraBoxStatus('Request failed. Inspect the console for details and verify Firestore permissions.', 'error');
+    if (extraBoxRequestButton) {
+      extraBoxRequestButton.disabled = false;
+    }
+  }
+}
+
+function setupExtraBox() {
+  if (!extraBoxSection) {
+    return;
+  }
+
+  annotateExtraBoxBannerSlots();
+  injectGoogleAdsScript();
+
+  if (!hasFirebaseConfig) {
+    renderExtraBoxStatus('Connect Firebase in window.EXTRA_BOX_CONFIG to enable extra boxes.', 'error');
+    if (extraBoxSubmitButton) {
+      extraBoxSubmitButton.disabled = true;
+    }
+    if (extraBoxRequestButton) {
+      extraBoxRequestButton.disabled = true;
+    }
+    return;
+  }
+
+  if (extraBoxSubmitButton) {
+    extraBoxSubmitButton.disabled = false;
+  }
+
+  if (extraBoxRequestButton) {
+    extraBoxRequestButton.disabled = true;
+  }
+
+  renderExtraBoxStatus('Type your player name and press “Get an extra box” to load your stats.');
+
+  if (extraBoxInitialized) {
+    return;
+  }
+  extraBoxInitialized = true;
+
+  if (extraBoxForm) {
+    extraBoxForm.addEventListener('submit', handleExtraBoxSubmit);
+  }
+
+  if (extraBoxInput) {
+    extraBoxInput.addEventListener('input', () => {
+      renderExtraBoxStatus('Waiting for you to submit your player name.');
+      renderExtraBoxSummary(null);
+      if (extraBoxRequestButton) {
+        extraBoxRequestButton.disabled = true;
+      }
+    });
+  }
+
+  if (extraBoxRequestButton) {
+    extraBoxRequestButton.addEventListener('click', handleRequestBoxClick);
+  }
 }
 
 playerSearchInput.addEventListener('change', () => updatePlayerResults());
