@@ -542,6 +542,213 @@ a:focus {
   font-style: italic;
 }
 
+/*
+  Extra box feature styles
+  ---------------------------------------------------------------------------
+  The block below styles the rewarded extra box flow, its banners, form and
+  status messages. The layout intentionally mirrors the other cards so the
+  section blends with the rest of the page.
+*/
+.extra-box-card {
+  display: grid;
+  gap: calc(1.6rem * var(--spacing-scale));
+  margin-top: calc(1.8rem * var(--spacing-scale));
+  padding: calc(1.5rem * var(--spacing-scale)) calc(1.35rem * var(--spacing-scale));
+  border-radius: var(--radius-lg);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(2, 6, 23, 0.72);
+  box-shadow: var(--shadow-soft);
+}
+
+.extra-box-card__ads {
+  display: grid;
+  gap: calc(1.05rem * var(--spacing-scale));
+}
+
+.ads-banner {
+  padding: calc(0.75rem * var(--spacing-scale));
+  border-radius: var(--radius-md);
+  border: 1px dashed rgba(148, 163, 184, 0.28);
+  background: rgba(15, 23, 42, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 120px;
+  position: relative;
+  overflow: hidden;
+}
+
+.ads-banner--secondary {
+  min-height: 90px;
+}
+
+.ads-banner .adsbygoogle {
+  display: block !important;
+  width: 100% !important;
+  min-height: 60px;
+}
+
+.extra-box-form {
+  display: grid;
+  gap: calc(1.2rem * var(--spacing-scale));
+}
+
+.extra-box-form__field {
+  display: grid;
+  gap: calc(0.55rem * var(--spacing-scale));
+}
+
+.extra-box-form__field label {
+  display: grid;
+  gap: calc(0.45rem * var(--spacing-scale));
+  font-size: clamp(calc(0.78rem * var(--font-scale)),
+      calc((0.74rem + 0.25vw) * var(--font-scale)), calc(0.9rem * var(--font-scale)));
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.extra-box-form__field input {
+  width: 100%;
+  padding: clamp(calc(0.72rem * var(--spacing-scale)),
+      calc((0.68rem + 0.4vw) * var(--spacing-scale)),
+      calc(0.95rem * var(--spacing-scale)))
+    clamp(calc(0.9rem * var(--spacing-scale)), calc((0.82rem + 0.7vw) * var(--spacing-scale)),
+      calc(1.25rem * var(--spacing-scale)));
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(2, 6, 23, 0.82);
+  color: var(--text-primary);
+  font-size: clamp(calc(0.98rem * var(--font-scale)),
+      calc((0.94rem + 0.35vw) * var(--font-scale)), calc(1.1rem * var(--font-scale)));
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.extra-box-form__field input:focus {
+  outline: none;
+  border-color: rgba(56, 189, 248, 0.5);
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.18);
+}
+
+.extra-box-form__summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(0.6rem * var(--spacing-scale));
+  padding: calc(0.85rem * var(--spacing-scale)) calc(1rem * var(--spacing-scale));
+  border-radius: var(--radius-md);
+  background: rgba(13, 148, 136, 0.16);
+  border: 1px solid rgba(45, 212, 191, 0.22);
+  color: #5eead4;
+  font-size: clamp(calc(0.86rem * var(--font-scale)),
+      calc((0.82rem + 0.25vw) * var(--font-scale)), calc(0.98rem * var(--font-scale)));
+}
+
+.extra-box-form__summary-value {
+  font-size: clamp(calc(1.25rem * var(--font-scale)),
+      calc((1.15rem + 0.45vw) * var(--font-scale)), calc(1.5rem * var(--font-scale)));
+  font-weight: 700;
+  color: #bbf7d0;
+}
+
+.extra-box__feedback {
+  margin: 0;
+  padding: calc(0.75rem * var(--spacing-scale)) calc(0.95rem * var(--spacing-scale));
+  border-radius: var(--radius-sm);
+  font-size: clamp(calc(0.82rem * var(--font-scale)),
+      calc((0.78rem + 0.3vw) * var(--font-scale)), calc(0.95rem * var(--font-scale)));
+  background: rgba(30, 41, 59, 0.65);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  color: var(--text-secondary);
+}
+
+.extra-box__feedback--success {
+  background: rgba(13, 148, 136, 0.18);
+  border-color: rgba(45, 212, 191, 0.28);
+  color: #a7f3d0;
+}
+
+.extra-box__feedback--error {
+  background: rgba(190, 18, 60, 0.18);
+  border-color: rgba(244, 63, 94, 0.28);
+  color: #fecdd3;
+}
+
+.extra-box__feedback--info {
+  background: rgba(37, 99, 235, 0.18);
+  border-color: rgba(96, 165, 250, 0.28);
+  color: #bfdbfe;
+}
+
+.extra-box-form__button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(0.45rem * var(--spacing-scale));
+  padding: calc(0.85rem * var(--spacing-scale)) calc(1.4rem * var(--spacing-scale));
+  border-radius: 999px;
+  border: 1px solid rgba(56, 189, 248, 0.32);
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.24), rgba(14, 165, 233, 0.08));
+  color: var(--text-primary);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: transform 140ms ease, box-shadow 140ms ease, border-color 140ms ease,
+    background 140ms ease;
+}
+
+.extra-box-form__button:hover,
+.extra-box-form__button:focus-visible {
+  transform: translateY(-1px);
+  border-color: rgba(56, 189, 248, 0.6);
+  box-shadow: 0 calc(10px * var(--elevation-scale)) calc(24px * var(--elevation-scale))
+    rgba(14, 165, 233, 0.18);
+}
+
+.extra-box-form__button:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+  transform: none;
+  box-shadow: none;
+}
+
+.extra-box-form__button .extra-box-form__button-progress {
+  display: none;
+}
+
+.extra-box-form__button[data-loading='true'] .extra-box-form__button-label {
+  display: none;
+}
+
+.extra-box-form__button[data-loading='true'] .extra-box-form__button-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(0.35rem * var(--spacing-scale));
+}
+
+.extra-box-form__note {
+  margin: 0;
+  font-size: clamp(calc(0.78rem * var(--font-scale)),
+      calc((0.74rem + 0.25vw) * var(--font-scale)), calc(0.9rem * var(--font-scale)));
+  color: var(--text-muted);
+}
+
+.extra-box-reward {
+  min-height: 120px;
+  border-radius: var(--radius-md);
+  border: 1px dashed rgba(14, 165, 233, 0.3);
+  background: rgba(8, 15, 35, 0.65);
+  display: grid;
+  place-items: center;
+  padding: calc(1rem * var(--spacing-scale));
+  font-size: clamp(calc(0.82rem * var(--font-scale)),
+      calc((0.78rem + 0.25vw) * var(--font-scale)), calc(0.95rem * var(--font-scale)));
+  color: rgba(148, 163, 184, 0.85);
+  text-align: center;
+}
+
 .page__footer {
   padding: calc(2.5rem * var(--spacing-scale)) calc(1.6rem * var(--spacing-scale))
     calc(3rem * var(--spacing-scale));
