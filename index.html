@@ -50,6 +50,9 @@
           <button type="button" class="quick-nav__button" data-scroll-target="player-stats">
             Player stats
           </button>
+          <button type="button" class="quick-nav__button" data-scroll-target="extra-box">
+            Extra box
+          </button>
         </div>
       </nav>
 
@@ -102,6 +105,87 @@
             </div>
           </div>
         </section>
+
+        <section id="extra-box" class="panel panel--extra" aria-labelledby="extra-box-title">
+          <div class="panel__header">
+            <h2 id="extra-box-title" class="panel__title">Extra Box</h2>
+            <span class="panel__subtitle">Enter your name to get an extra box</span>
+          </div>
+
+          <div class="extra-box__layout">
+            <aside class="extra-box__ads" aria-label="Promotional banners">
+              <div class="ad-slot" id="extra-box-banner-top" data-ad-slot="banner-top">
+                <!--
+                  Google Ads banner placeholder (top)
+                  Replace the placeholder <p> with the AdSense or Google Ad Manager tag, for example:
+                  <ins class="adsbygoogle"
+                       style="display:block"
+                       data-ad-client="ca-pub-XXXXXXXXXXXXXXXX"
+                       data-ad-slot="1234567890"
+                       data-ad-format="auto"
+                       data-full-width-responsive="true"></ins>
+                  <script>(adsbygoogle = window.adsbygoogle || []).push({});</script>
+                -->
+                <p class="ad-slot__placeholder">Add your 1st Google Ads banner code here.</p>
+              </div>
+
+              <div class="ad-slot" id="extra-box-banner-bottom" data-ad-slot="banner-bottom">
+                <!--
+                  Google Ads banner placeholder (bottom)
+                  Use a second ad unit ID so that two banners can rotate independently.
+                  Copy the Google snippet here once your ad units are approved.
+                -->
+                <p class="ad-slot__placeholder">Add your 2nd Google Ads banner code here.</p>
+              </div>
+            </aside>
+
+            <div class="extra-box__content">
+              <form id="extra-box-form" class="extra-box__form" autocomplete="off">
+                <label for="extra-player-name" class="extra-box__label">
+                  Player name
+                  <input
+                    type="search"
+                    id="extra-player-name"
+                    name="extra-player-name"
+                    placeholder="e.g. player1"
+                    list="player-suggestions"
+                    autocomplete="off"
+                    required
+                  />
+                </label>
+
+                <div class="extra-box__summary" aria-live="polite">
+                  <span class="extra-box__summary-label">Extra boxes for Day <strong id="extra-box-day">—</strong></span>
+                  <span class="extra-box__summary-value" id="extra-box-count">0</span>
+                </div>
+
+                <p class="extra-box__status" id="extra-box-status">
+                  Enter your name and connect Firebase to show existing extra boxes.
+                </p>
+
+                <button type="submit" class="extra-box__button" id="extra-box-request">
+                  Get an extra box
+                </button>
+              </form>
+
+              <div
+                class="ad-slot ad-slot--reward"
+                id="rewarded-ad-container"
+                data-ad-slot="rewarded"
+                data-ad-message="Loading rewarded ad…"
+                aria-live="polite"
+              >
+                <!--
+                  Rewarded Google Ad placeholder
+                  Implement the rewarded ad with Google Ad Manager or AdMob and call
+                  window.EXTRA_BOX_CONFIG.loadRewardedAd(options) as documented in assets/js/extra-box-config.example.js.
+                  The JavaScript will wait for your promise to resolve before granting a box.
+                -->
+                <p class="ad-slot__placeholder">Rewarded ad loads here before a box is granted.</p>
+              </div>
+            </div>
+          </div>
+        </section>
       </main>
 
       <footer class="page__footer">
@@ -109,6 +193,13 @@
       </footer>
     </div>
 
+    <!--
+      ⚠️ Important: Define window.EXTRA_BOX_CONFIG with your Firebase + Google Ads settings
+      before loading assets/js/app.js. Create a copy of assets/js/extra-box-config.example.js,
+      update the credentials, and include it here:
+
+      <script src="assets/js/extra-box-config.js"></script>
+    -->
     <script src="assets/js/app.js" type="module"></script>
   </body>
 </html>

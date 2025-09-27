@@ -12,6 +12,16 @@ const quickNav = document.querySelector('.quick-nav');
 const quickNavButtons = quickNav
   ? Array.from(quickNav.querySelectorAll('.quick-nav__button'))
   : [];
+const extraBoxForm = document.getElementById('extra-box-form');
+const extraBoxInput = document.getElementById('extra-player-name');
+const extraBoxDayLabel = document.getElementById('extra-box-day');
+const extraBoxCountLabel = document.getElementById('extra-box-count');
+const extraBoxStatus = document.getElementById('extra-box-status');
+const extraBoxRequestButton = document.getElementById('extra-box-request');
+const rewardedAdContainer = document.getElementById('rewarded-ad-container');
+
+const EXTRA_BOX_DEFAULT_STATUS =
+  'Enter your name and connect Firebase to show existing extra boxes.';
 
 const lastAppliedMetrics = {
   width: 0,
@@ -26,6 +36,17 @@ let canvasAnimationId = null;
 let canvasResizeHandler = null;
 let quickNavObserver = null;
 let metricsFrameId = null;
+
+const extraBoxState = {
+  /* Highest day number detected in the JSON file. */
+  lastDay: null,
+  /* Map<normalizedName, { name: string, count: number }> from Firebase. */
+  boxes: new Map(),
+  /* Track async transitions to avoid duplicate requests. */
+  loading: false,
+  /* Flag toggled to true when Firebase responds successfully. */
+  firebaseReady: false,
+};
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -247,6 +268,7 @@ function initialize(dayStats) {
   buildPlayerIndex(sortedDays);
   populatePlayerSuggestions();
   startCanvasAnimation();
+  initializeExtraBox(sortedDays);
 }
 
 function buildWinnerTimeline(days) {
@@ -702,6 +724,337 @@ function buildInstagramLink(name) {
   if (!name) return '#';
   const sanitized = name.replace(/[^a-z0-9._-]/gi, '');
   return `https://instagram.com/${sanitized}`;
+}
+
+/* -------------------------------------------------------------------------- */
+/*                           Extra Box helper logic                           */
+/* -------------------------------------------------------------------------- */
+
+function normalizePlayerKey(name) {
+  return typeof name === 'string' ? name.trim().toLowerCase() : '';
+}
+
+function buildFirebaseKey(name) {
+  return normalizePlayerKey(name).replace(/[.#$/\[\]]/g, '_');
+}
+
+function setExtraBoxDay(day) {
+  if (!extraBoxDayLabel) return;
+  const value = Number.isFinite(day) ? Math.max(0, Math.round(day)) : '—';
+  extraBoxDayLabel.textContent = value;
+}
+
+function setExtraBoxCount(count) {
+  if (!extraBoxCountLabel) return;
+  const safeCount = Number.isFinite(count) && count >= 0 ? Math.round(count) : 0;
+  extraBoxCountLabel.textContent = safeCount;
+}
+
+function setExtraBoxStatus(message, state = '') {
+  if (!extraBoxStatus) return;
+  extraBoxStatus.textContent = message;
+  if (state) {
+    extraBoxStatus.setAttribute('data-state', state);
+  } else {
+    extraBoxStatus.removeAttribute('data-state');
+  }
+}
+
+function setExtraBoxButtonLoading(isLoading) {
+  if (!extraBoxRequestButton) return;
+  extraBoxRequestButton.disabled = isLoading;
+  if (isLoading) {
+    if (!extraBoxRequestButton.dataset.originalLabel) {
+      extraBoxRequestButton.dataset.originalLabel = extraBoxRequestButton.textContent;
+    }
+    extraBoxRequestButton.textContent = 'Processing…';
+  } else if (extraBoxRequestButton.dataset.originalLabel) {
+    extraBoxRequestButton.textContent = extraBoxRequestButton.dataset.originalLabel;
+    delete extraBoxRequestButton.dataset.originalLabel;
+  }
+}
+
+function getExtraBoxEntry(name) {
+  const key = normalizePlayerKey(name);
+  return extraBoxState.boxes.get(key) || null;
+}
+
+async function initializeExtraBox(dayStats) {
+  if (!extraBoxForm) {
+    return;
+  }
+
+  const lastDay = dayStats.reduce((max, day) => Math.max(max, Number(day.day) || 0), 0);
+  extraBoxState.lastDay = lastDay;
+  setExtraBoxDay(lastDay);
+  setExtraBoxCount(0);
+  setExtraBoxStatus(EXTRA_BOX_DEFAULT_STATUS);
+
+  try {
+    await refreshExtraBoxData();
+  } catch (error) {
+    console.warn('Extra box initialization skipped until Firebase is configured.', error);
+  }
+}
+
+async function refreshExtraBoxData() {
+  if (!extraBoxForm || extraBoxState.loading) {
+    return;
+  }
+
+  extraBoxState.loading = true;
+  setExtraBoxStatus('Syncing extra boxes with Firebase…');
+
+  try {
+    const boxes = await fetchExtraBoxesFromFirebase();
+    extraBoxState.boxes = boxes;
+    extraBoxState.firebaseReady = true;
+
+    const typedName = extraBoxInput?.value?.trim();
+    if (typedName) {
+      displayExtraBoxCount(typedName);
+    } else {
+      setExtraBoxStatus('Firebase connected. Enter your name to see extra boxes.', 'success');
+    }
+  } catch (error) {
+    extraBoxState.firebaseReady = false;
+    setExtraBoxStatus(
+      'Firebase connection missing. Follow the setup instructions to enable Extra Box tracking.',
+      'error',
+    );
+    throw error;
+  } finally {
+    extraBoxState.loading = false;
+  }
+}
+
+function displayExtraBoxCount(name) {
+  const trimmed = name?.trim();
+  if (!trimmed) {
+    setExtraBoxCount(0);
+    setExtraBoxStatus(
+      extraBoxState.firebaseReady
+        ? 'Enter your name to see how many extra boxes you have.'
+        : EXTRA_BOX_DEFAULT_STATUS,
+    );
+    return;
+  }
+
+  if (!extraBoxState.firebaseReady) {
+    setExtraBoxStatus(
+      'Firebase is not connected yet. Complete the setup to enable lookups.',
+      'error',
+    );
+    return;
+  }
+
+  const entry = getExtraBoxEntry(trimmed);
+  const count = entry?.count ?? 0;
+  setExtraBoxCount(count);
+
+  if (entry) {
+    setExtraBoxStatus(`Extra boxes for Day ${extraBoxState.lastDay}: ${count}`, 'success');
+  } else {
+    setExtraBoxStatus(
+      `No extra boxes recorded yet for Day ${extraBoxState.lastDay}. Request one below.`,
+    );
+  }
+}
+
+async function handleExtraBoxSubmit(event) {
+  event.preventDefault();
+
+  if (!extraBoxForm) {
+    return;
+  }
+
+  const playerName = extraBoxInput?.value?.trim();
+  if (!playerName) {
+    setExtraBoxStatus('Please enter your player name before requesting a box.', 'error');
+    return;
+  }
+
+  try {
+    if (!extraBoxState.firebaseReady) {
+      await refreshExtraBoxData();
+    }
+  } catch (error) {
+    console.error('Unable to contact Firebase before requesting a box.', error);
+    return;
+  }
+
+  if (!extraBoxState.firebaseReady) {
+    return;
+  }
+
+  setExtraBoxButtonLoading(true);
+
+  try {
+    setExtraBoxStatus('Loading rewarded ad…');
+    await requestRewardedAd({ playerName });
+
+    const previous = getExtraBoxEntry(playerName);
+    const nextCount = (previous?.count || 0) + 1;
+
+    await persistExtraBoxCount({ playerName, count: nextCount });
+
+    extraBoxState.boxes.set(normalizePlayerKey(playerName), {
+      name: playerName,
+      count: nextCount,
+    });
+
+    setExtraBoxCount(nextCount);
+    setExtraBoxStatus(`Extra boxes for Day ${extraBoxState.lastDay}: ${nextCount}`, 'success');
+
+    setTimeout(() => {
+      window.location.reload();
+    }, 1200);
+  } catch (error) {
+    console.error('Failed to process the Extra Box request.', error);
+    setExtraBoxStatus(error?.message || 'The extra box could not be granted. Try again later.', 'error');
+  } finally {
+    setExtraBoxButtonLoading(false);
+  }
+}
+
+function handleExtraBoxLookup() {
+  if (!extraBoxInput) {
+    return;
+  }
+  displayExtraBoxCount(extraBoxInput.value);
+}
+
+async function requestRewardedAd({ playerName }) {
+  if (!rewardedAdContainer) {
+    return;
+  }
+
+  const config = window.EXTRA_BOX_CONFIG;
+  if (config && typeof config.loadRewardedAd === 'function') {
+    await config.loadRewardedAd({
+      container: rewardedAdContainer,
+      playerName,
+    });
+    return;
+  }
+
+  const originalMessage = rewardedAdContainer.dataset.adMessage;
+  rewardedAdContainer.dataset.adMessage = 'Simulating rewarded ad…';
+  rewardedAdContainer.setAttribute('data-ad-state', 'simulated');
+  await new Promise((resolve) => setTimeout(resolve, 1800));
+  rewardedAdContainer.removeAttribute('data-ad-state');
+  if (originalMessage) {
+    rewardedAdContainer.dataset.adMessage = originalMessage;
+  } else {
+    delete rewardedAdContainer.dataset.adMessage;
+  }
+}
+
+async function fetchExtraBoxesFromFirebase() {
+  const config = getExtraBoxConfig();
+  if (!config) {
+    throw new Error('Missing EXTRA_BOX_CONFIG.');
+  }
+
+  const base = config.realtimeDatabaseUrl?.replace(/\/?$/, '') || '';
+  if (!base) {
+    throw new Error('Firebase database URL is required.');
+  }
+
+  const path = config.extraBoxesPath || 'extraBoxes';
+  const auth = config.authToken ? `?auth=${encodeURIComponent(config.authToken)}` : '';
+  const response = await fetch(`${base}/${path}.json${auth}`, { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Firebase responded with status ${response.status}.`);
+  }
+
+  const payload = await response.json();
+  const map = new Map();
+
+  if (payload && typeof payload === 'object') {
+    Object.entries(payload).forEach(([key, value]) => {
+      if (value == null) {
+        return;
+      }
+
+      let name = key;
+      let count = 0;
+
+      if (typeof value === 'number') {
+        count = Number.isFinite(value) && value > 0 ? Math.round(value) : 0;
+      } else if (typeof value === 'object') {
+        name = typeof value.name === 'string' ? value.name : key;
+        const rawCount =
+          typeof value.count === 'number'
+            ? value.count
+            : typeof value.boxes === 'number'
+            ? value.boxes
+            : Number.parseInt(value.count, 10);
+        if (Number.isFinite(rawCount) && rawCount > 0) {
+          count = Math.round(rawCount);
+        }
+      }
+
+      map.set(normalizePlayerKey(name), {
+        name,
+        count,
+      });
+    });
+  }
+
+  return map;
+}
+
+async function persistExtraBoxCount({ playerName, count }) {
+  const config = getExtraBoxConfig();
+  if (!config) {
+    throw new Error('Missing EXTRA_BOX_CONFIG.');
+  }
+
+  const base = config.realtimeDatabaseUrl?.replace(/\/?$/, '') || '';
+  if (!base) {
+    throw new Error('Firebase database URL is required.');
+  }
+
+  const path = config.extraBoxesPath || 'extraBoxes';
+  const key = config.buildKey ? config.buildKey(playerName) : buildFirebaseKey(playerName);
+  const auth = config.authToken ? `?auth=${encodeURIComponent(config.authToken)}` : '';
+  const url = `${base}/${path}/${encodeURIComponent(key)}.json${auth}`;
+
+  const payload = {
+    name: playerName,
+    count,
+    updatedAt: new Date().toISOString(),
+  };
+
+  const response = await fetch(url, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to update Firebase (status ${response.status}).`);
+  }
+
+  return payload;
+}
+
+function getExtraBoxConfig() {
+  const config = window.EXTRA_BOX_CONFIG;
+  if (!config || typeof config !== 'object') {
+    return null;
+  }
+  return config;
+}
+
+if (extraBoxForm) {
+  extraBoxForm.addEventListener('submit', handleExtraBoxSubmit);
+}
+
+if (extraBoxInput) {
+  extraBoxInput.addEventListener('change', handleExtraBoxLookup);
+  extraBoxInput.addEventListener('input', handleExtraBoxLookup);
 }
 
 playerSearchInput.addEventListener('change', () => updatePlayerResults());
