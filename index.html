@@ -50,6 +50,9 @@
           <button type="button" class="quick-nav__button" data-scroll-target="player-stats">
             Player stats
           </button>
+          <button type="button" class="quick-nav__button" data-scroll-target="extra-box">
+            Extra box
+          </button>
         </div>
       </nav>
 
@@ -102,6 +105,74 @@
             </div>
           </div>
         </section>
+
+        <section id="extra-box" class="panel panel--extra" aria-labelledby="extra-box-title">
+          <div class="panel__header">
+            <h2 id="extra-box-title" class="panel__title">Extra Box</h2>
+            <span class="panel__subtitle">Enter your name to get an extra box</span>
+          </div>
+
+          <div class="extra-box" aria-live="polite">
+            <div class="extra-box__banners" aria-label="Sponsored banners">
+              <div class="extra-box__banner" id="extra-box-banner-top" data-ad-slot-index="0">
+                <!--
+                  Google Ads banner placeholder (top).
+                  Replace the <div> below with the official Google Ads code snippet once you have created a banner unit.
+                  Keep the surrounding container so the layout stays consistent before the ad loads.
+                -->
+                <div class="extra-box__banner-placeholder">Ad banner placeholder (top)</div>
+              </div>
+              <div class="extra-box__banner" id="extra-box-banner-bottom" data-ad-slot-index="1">
+                <!--
+                  Google Ads banner placeholder (bottom).
+                  You can drop the AdSense/Google Ad Manager <ins> tag inside this container; the script will attach automatically.
+                  Until you do, this placeholder keeps the layout stable and accessible.
+                -->
+                <div class="extra-box__banner-placeholder">Ad banner placeholder (bottom)</div>
+              </div>
+            </div>
+
+            <form id="extra-box-form" class="extra-box__form" autocomplete="off" novalidate>
+              <label for="extra-box-name" class="extra-box__label">
+                Player name
+                <input
+                  type="search"
+                  id="extra-box-name"
+                  name="extra-box-name"
+                  placeholder="e.g. player1"
+                  list="player-suggestions"
+                  autocomplete="off"
+                  required
+                />
+              </label>
+              <button type="submit" class="extra-box__submit">
+                Get an extra box
+              </button>
+            </form>
+
+            <div class="extra-box__status" id="extra-box-status" role="status"></div>
+
+            <div class="extra-box__summary" id="extra-box-summary" hidden>
+              <p class="extra-box__summary-line" id="extra-box-total"></p>
+              <p class="extra-box__summary-line" id="extra-box-daily"></p>
+            </div>
+
+            <button type="button" class="extra-box__request" id="extra-box-request" disabled>
+              Request box
+            </button>
+
+            <div class="extra-box__rewarded" id="extra-box-rewarded" hidden>
+              <!--
+                Rewarded Ad container placeholder.
+                When you wire a Google rewarded ad, render it inside the element below.
+                The JavaScript toggles this wrapper to display a loading skeleton while the ad is being prepared.
+              -->
+              <div class="extra-box__rewarded-inner" id="extra-box-rewarded-inner">
+                <p class="extra-box__rewarded-copy">Loading rewarded ad…</p>
+              </div>
+            </div>
+          </div>
+        </section>
       </main>
 
       <footer class="page__footer">
@@ -109,6 +180,32 @@
       </footer>
     </div>
 
+    <!--
+      Extra box configuration blueprint.
+      Replace the placeholder values with your live Firebase + Google Ads settings before deploying.
+      Keeping the configuration in a dedicated object prevents accidentally committing secrets to the repository.
+    -->
+    <script>
+      window.EXTRA_BOX_CONFIG = {
+        firebaseConfig: {
+          apiKey: 'YOUR_FIREBASE_API_KEY',
+          authDomain: 'YOUR_FIREBASE_AUTH_DOMAIN',
+          projectId: 'YOUR_FIREBASE_PROJECT_ID',
+          storageBucket: 'YOUR_FIREBASE_STORAGE_BUCKET',
+          messagingSenderId: 'YOUR_FIREBASE_MESSAGING_SENDER_ID',
+          appId: 'YOUR_FIREBASE_APP_ID',
+        },
+        googleAds: {
+          publisherId: 'ca-pub-XXXXXXXXXXXXXXXX',
+          rewardedUnitId: 'ca-pub-XXXXXXXXXXXXXXXX/REWARDED_SLOT_ID',
+          bannerUnitIds: [
+            'ca-pub-XXXXXXXXXXXXXXXX/BANNER_TOP_SLOT_ID',
+            'ca-pub-XXXXXXXXXXXXXXXX/BANNER_BOTTOM_SLOT_ID',
+          ],
+        },
+        firestoreCollection: 'extraBoxes',
+      };
+    </script>
     <script src="assets/js/app.js" type="module"></script>
   </body>
 </html>
