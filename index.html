@@ -1,100 +1,151 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Ball Crusher – Daily Mobile Stats</title>
-    <meta
-      name="description"
-      content="Follow Ball Crusher daily results with a mobile-first experience that showcases winners, full leaderboards, and player trends."
-    />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
-      rel="stylesheet"
-    />
-    <link rel="stylesheet" href="assets/css/styles.css" />
-  </head>
-  <body>
-    <div class="page">
-      <header class="hero" role="banner">
-        <div class="hero__container">
-          <div class="hero__content">
-            <p class="hero__eyebrow">Ball Crusher Daily Recap</p>
-            <h1 class="hero__title">Designed purely for your phone.</h1>
-            <p class="hero__description">
-              Monitor daily winners, dive into complete leaderboards, and study player trajectories with an interface that measures your device and scales every element for a distortion-free mobile experience.
-            </p>
-          </div>
-          <figure class="hero__visual">
-            <canvas
-              id="statsCanvas"
-              width="480"
-              height="320"
-              aria-label="Animated winner timeline"
-            ></canvas>
-            <figcaption class="hero__hint">Live winner timeline</figcaption>
-          </figure>
-        </div>
-      </header>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>404 — Under Construction</title>
+  <meta name="description" content="This page is under construction. Comment 'rank' on my latest video to get your rank there." />
+  <meta name="theme-color" content="#0b0f14" />
+  <style>
+    :root{
+      --bg:#0b0f14;          /* background */
+      --fg:#e8eefc;          /* foreground text */
+      --muted:#9aa4b2;       /* secondary text */
+      --accent:#60a5fa;      /* link/accents */
+      --accent-hi:#9fd1ff;   /* brighter accent for hover */
+      --panel:#0f172a;       /* card surface */
+    }
 
-      <main class="main" id="content">
-        <section id="open-stats" class="panel" aria-labelledby="open-stats-title">
-          <div class="panel__header">
-            <h2 id="open-stats-title" class="panel__title">Open Stats</h2>
-            <span class="panel__subtitle">Tap any day to open a phone-tuned leaderboard</span>
-          </div>
-          <div id="open-stats-grid" class="card-grid" role="list"></div>
-        </section>
+    html,body{height:100%}
+    body{
+      margin:0;
+      min-height:100dvh; /* mobile viewport safe */
+      display:grid;
+      place-items:center;
+      padding:
+        calc(env(safe-area-inset-top) + 12px)
+        calc(env(safe-area-inset-right) + 12px)
+        calc(env(safe-area-inset-bottom) + 16px)
+        calc(env(safe-area-inset-left) + 12px);
+      background: radial-gradient(1200px 800px at 10% 10%,rgba(96,165,250,.08),transparent 60%),
+                  radial-gradient(1000px 700px at 90% 90%,rgba(99,102,241,.08),transparent 60%),
+                  var(--bg);
+      color:var(--fg);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, Apple Color Emoji, Segoe UI Emoji;
+      line-height:1.55;
+      -webkit-font-smoothing:antialiased;
+      text-rendering:optimizeLegibility;
+      -webkit-text-size-adjust:100%;
+      -ms-text-size-adjust:100%;
+      -webkit-tap-highlight-color: transparent;
+    }
 
-        <section id="player-stats" class="panel" aria-labelledby="player-stats-title">
-          <div class="panel__header">
-            <h2 id="player-stats-title" class="panel__title">Player Stats</h2>
-            <span class="panel__subtitle">Search any athlete and auto-scale their daily stats</span>
-          </div>
-          <div class="search-panel">
-            <div class="search-controls">
-              <label for="player-search">
-                Player name
-                <input
-                  type="search"
-                  id="player-search"
-                  name="player-search"
-                  placeholder="e.g. player1"
-                  autocomplete="off"
-                  list="player-suggestions"
-                />
-                <datalist id="player-suggestions"></datalist>
-              </label>
-              <label for="sort-field">
-                Sort by
-                <select id="sort-field" name="sort-field">
-                  <option value="day">Day</option>
-                  <option value="rank">Rank</option>
-                  <option value="time">Time</option>
-                </select>
-              </label>
-              <label for="sort-order">
-                Order
-                <select id="sort-order" name="sort-order">
-                  <option value="asc">Ascending</option>
-                  <option value="desc">Descending</option>
-                </select>
-              </label>
-            </div>
-            <div id="player-results" class="player-results" aria-live="polite">
-              <p class="no-results">Search for a player to see results.</p>
-            </div>
-          </div>
-        </section>
-      </main>
+    main{width:min(720px,96vw); text-align:center; padding:clamp(20px,5vw,48px)}
 
-      <footer class="page__footer">
-        Data refreshes daily. Keep <code>day_stats.json</code> in sync on GitHub to surface the latest runs.
-      </footer>
+    /* Card */
+    .card{position:relative; padding:clamp(20px,5vw,40px); background:linear-gradient(180deg,rgba(255,255,255,.03),rgba(255,255,255,.01)); border:1px solid rgba(255,255,255,.08); border-radius:24px; box-shadow:0 10px 40px rgba(0,0,0,.35)}
+
+    /* Subtle scanlines + glow */
+    .card::after{content:""; pointer-events:none; position:absolute; inset:0; background: repeating-linear-gradient( to bottom, rgba(255,255,255,.02), rgba(255,255,255,.02) 1px, transparent 2px, transparent 4px ); mix-blend-mode:overlay; opacity:.35; border-radius:24px}
+
+    h1{font-size: clamp(48px, 16vw, 140px); line-height:.9; margin:0 0 .25em 0; letter-spacing:.02em}
+
+    /* GLITCH effect for the 404 */
+    .glitch{ position:relative; display:inline-block; }
+    .glitch > span{ display:block; filter:drop-shadow(0 8px 18px rgba(0,0,0,.45)); }
+    .glitch::before,
+    .glitch::after{
+      content: attr(data-text);
+      position:absolute; inset:0; 
+      clip-path: inset(0);
+      pointer-events:none;
+    }
+    .glitch::before{ transform: translate(0); text-shadow: -2px 0 #ff0055; mix-blend-mode:screen; animation:gl1 2.2s infinite steps(2,end); }
+    .glitch::after{ transform: translate(0); text-shadow:  2px 0 #00e5ff; mix-blend-mode:screen; animation:gl2 2.2s infinite steps(2,end); }
+
+    @keyframes gl1 { 10%{transform:translate(-2px,-1px)} 20%{transform:translate(1px,1px)} 30%{transform:translate(-1px,2px)} 40%{transform:translate(2px,-2px)} 50%{transform:translate(-1px,1px)} 60%{transform:translate(2px,2px)} 70%{transform:translate(-2px,1px)} 80%{transform:translate(1px,-2px)} 90%{transform:translate(0,0)} }
+    @keyframes gl2 { 10%{transform:translate(2px,1px)} 20%{transform:translate(-1px,-1px)} 30%{transform:translate(1px,-2px)} 40%{transform:translate(-2px,2px)} 50%{transform:translate(1px,-1px)} 60%{transform:translate(-2px,-2px)} 70%{transform:translate(2px,-1px)} 80%{transform:translate(-1px,2px)} 90%{transform:translate(0,0)} }
+
+    /* Accent divider */
+    .divider{ height:2px; width:100%; background:linear-gradient(90deg, transparent, rgba(96,165,250,.6), transparent); margin:clamp(8px,2.5vw,18px) 0 }
+
+    p{ margin:.5rem 0; font-size:clamp(15px, 4vw, 19px) }
+
+    .badge{ display:inline-flex; gap:.5ch; align-items:center; font-size:12px; padding:6px 10px; border-radius:999px; background:rgba(96,165,250,.1); border:1px solid rgba(96,165,250,.25); color:var(--fg); text-transform:uppercase; letter-spacing:.12em }
+
+    /* Base link style (exclude the button) */
+    a:not(.btn-video), a:visited:not(.btn-video){ color: #75b4ff; text-decoration: underline; text-underline-offset: .18em; }
+
+    /* Mobile-first CTA layout */
+    .cta{ display:flex; flex-direction:column; align-items:center; gap:12px; margin-top:8px }
+
+    /* High-contrast VIDEO button */
+    .btn-video{
+      appearance:none; display:inline-flex; align-items:center; justify-content:center; gap:.5ch;
+      width:min(560px,100%);
+      min-height:52px; /* big tap target */
+      padding:14px 18px; border-radius:14px; font-weight:800; letter-spacing:.02em;
+      font-size:clamp(16px,4.8vw,18px);
+      background: linear-gradient(180deg, var(--accent-hi), var(--accent));
+      color:#07121c; text-decoration:none; border:1px solid rgba(255,255,255,.4);
+      box-shadow: 0 10px 30px rgba(96,165,250,.45), 0 0 0 3px rgba(96,165,250,.28) inset;
+      transform: translateZ(0);
+      touch-action: manipulation;
+    }
+    .btn-video:hover{ filter:brightness(1.06); box-shadow:0 12px 36px rgba(96,165,250,.6), 0 0 0 3px rgba(96,165,250,.32) inset }
+    .btn-video:active{ transform: translateY(1px) }
+    .btn-video:focus-visible{ outline: none; box-shadow: 0 0 0 3px #0b0f14, 0 0 0 6px var(--accent) }
+
+    /* Clean SHIMMER loading bar (no visible seams) */
+    .bar{ position:relative; height:12px; width:min(520px,100%); margin:16px auto 0; border-radius:999px; background:rgba(255,255,255,.08); overflow:hidden; border:1px solid rgba(255,255,255,.12)}
+    .bar::before{ content:""; position:absolute; top:0; bottom:0; left:-50%; right:auto; width:50%; background:linear-gradient(90deg, transparent, rgba(255,255,255,.85), transparent); border-radius:inherit; filter:blur(.5px); animation:shimmer 1.4s infinite ease-in-out }
+
+    @keyframes shimmer{ 0%{ transform:translateX(0) } 100%{ transform:translateX(300%) } }
+
+    /* Animated status text: "Working hard..." with pulsing dots */
+    .status{ color:var(--muted); font-size:.95em; display:flex; align-items:center; justify-content:center; gap:8px; margin-top:10px }
+    .status .label{ letter-spacing:.02em }
+    .dots{ display:inline-flex; gap:6px }
+    .dots span{ width:6px; height:6px; border-radius:50%; background: currentColor; opacity:.35; animation: bounce 1.2s infinite ease-in-out }
+    .dots span:nth-child(2){ animation-delay:.15s }
+    .dots span:nth-child(3){ animation-delay:.3s }
+    @keyframes bounce{ 0%,80%,100%{ transform:translateY(0); opacity:.3 } 40%{ transform:translateY(-4px); opacity:1 } }
+
+    /* Small-screen tweaks */
+    @media (max-width: 480px){
+      .card{ padding:24px; border-radius:20px }
+      .badge{ font-size:11px }
+      .glitch::before{ text-shadow:-1px 0 #ff335f }
+      .glitch::after{ text-shadow: 1px 0 #33e5ff }
+      .bar{ height:10px }
+    }
+
+    /* Reduce motion for accessibility */
+    @media (prefers-reduced-motion: reduce){
+      .glitch::before, .glitch::after, .bar::before, .dots span { animation: none }
+    }
+
+    .hint{ color:var(--muted); font-size:.9em; margin-top:10px }
+  </style>
+</head>
+<body>
+  <main role="main" aria-labelledby="title">
+    <div class="card" aria-live="polite">
+      <div class="badge" aria-hidden="true">Site under construction</div>
+
+      <h1 id="title" class="glitch" data-text="404"><span>404</span></h1>
+      <div class="divider" aria-hidden="true"></div>
+
+      <p>This page is currently being built.</p>
+      <div class="cta">
+        <p style="margin:.25rem 0 0 0">Want a rank on my profile? Comment 'rank' on my latest:</p>
+        <a class="btn-video" href="https://www.instagram.com/p/DPMroogjjVd" target="_blank" rel="noopener">video</a>
+      </div>
+
+      <div class="bar" role="progressbar" aria-label="Build progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="42"></div>
+      <p class="status" role="status" aria-live="polite"><span class="label">Working hard</span><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span></p>
+      <noscript><p class="hint">JavaScript is not required for this page. Animations are CSS-only.</p></noscript>
     </div>
-
-    <script src="assets/js/app.js" type="module"></script>
-  </body>
+  </main>
+</body>
 </html>
