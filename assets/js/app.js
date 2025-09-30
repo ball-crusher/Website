@@ -1,3 +1,12 @@
+import { initializeApp, getApps, getApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
+import {
+  getFirestore,
+  doc,
+  getDoc,
+  runTransaction,
+  serverTimestamp,
+} from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+
 const DATA_URL = 'data/day_stats.json';
 
 const root = document.documentElement;
@@ -13,6 +22,16 @@ const quickNavButtons = quickNav
   ? Array.from(quickNav.querySelectorAll('.quick-nav__button'))
   : [];
 
+// Extra box specific DOM references
+const extraBoxSection = document.getElementById('extra-box');
+const extraBoxForm = document.getElementById('extra-box-form');
+const extraBoxInput = document.getElementById('extra-box-player');
+const extraBoxDayLabel = document.getElementById('extra-box-day-label');
+const extraBoxCountValue = document.getElementById('extra-box-count-value');
+const extraBoxFeedback = document.getElementById('extra-box-feedback');
+const extraBoxRequestButton = document.getElementById('extra-box-request');
+const extraBoxRewardContainer = document.getElementById('extra-box-reward-ad');
+
 const lastAppliedMetrics = {
   width: 0,
   height: 0,
@@ -26,6 +45,14 @@ let canvasAnimationId = null;
 let canvasResizeHandler = null;
 let quickNavObserver = null;
 let metricsFrameId = null;
+
+// Extra box feature state
+let latestDayNumber = null;
+let extraBoxLookupTimeoutId = null;
+let firebaseAppInstance = null;
+let firestoreInstance = null;
+let firebaseInitializationError = null;
+const extraBoxCache = new Map();
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -222,6 +249,439 @@ function setupQuickNav() {
 
 setupQuickNav();
 
+/**
+ * Normalizes player names so that lookups are case-insensitive and trimmed.
+ * @param {string} name
+ * @returns {string}
+ */
+function normalizePlayerName(name) {
+  return typeof name === 'string' ? name.trim().toLowerCase() : '';
+}
+
+/**
+ * Updates the day label in the extra box card.
+ * @param {number|null} dayNumber
+ */
+function setExtraBoxDay(dayNumber) {
+  if (!extraBoxDayLabel) {
+    return;
+  }
+  if (typeof dayNumber === 'number' && Number.isFinite(dayNumber)) {
+    extraBoxDayLabel.textContent = String(dayNumber);
+  } else {
+    extraBoxDayLabel.textContent = '—';
+  }
+}
+
+/**
+ * Updates the count label in the extra box card.
+ * @param {number} count
+ */
+function updateExtraBoxSummary(count) {
+  if (!extraBoxCountValue) {
+    return;
+  }
+  const safeCount = Number.isFinite(count) && count >= 0 ? count : 0;
+  extraBoxCountValue.textContent = String(safeCount);
+}
+
+/**
+ * Writes a status message inside the feedback paragraph.
+ * @param {string} message
+ * @param {'info' | 'success' | 'error'} [variant]
+ */
+function setExtraBoxFeedback(message, variant = 'info') {
+  if (!extraBoxFeedback) {
+    return;
+  }
+
+  const baseClass = 'extra-box__feedback';
+  extraBoxFeedback.className = baseClass;
+
+  if (!message) {
+    extraBoxFeedback.textContent = '';
+    extraBoxFeedback.hidden = true;
+    return;
+  }
+
+  if (variant) {
+    extraBoxFeedback.classList.add(`${baseClass}--${variant}`);
+  }
+  extraBoxFeedback.textContent = message;
+  extraBoxFeedback.hidden = false;
+}
+
+/**
+ * Toggles the loading state on the request button.
+ * @param {boolean} isLoading
+ */
+function setExtraBoxButtonLoading(isLoading) {
+  if (!extraBoxRequestButton) {
+    return;
+  }
+  extraBoxRequestButton.disabled = Boolean(isLoading);
+  extraBoxRequestButton.setAttribute('data-loading', isLoading ? 'true' : 'false');
+}
+
+/**
+ * Initializes Firebase (if configured) and returns the Firestore instance.
+ * When configuration is missing the function quietly returns null so the UI
+ * can surface actionable instructions instead of throwing errors.
+ * @returns {import('firebase/firestore').Firestore | null}
+ */
+function ensureFirestoreInstance() {
+  if (firestoreInstance || firebaseInitializationError) {
+    return firestoreInstance;
+  }
+
+  const config = window?.EXTRA_BOX_FIREBASE_CONFIG;
+  if (!config) {
+    return null;
+  }
+
+  try {
+    firebaseAppInstance = getApps().length ? getApp() : initializeApp(config);
+    firestoreInstance = getFirestore(firebaseAppInstance);
+  } catch (error) {
+    firebaseInitializationError = error;
+    console.error('Failed to initialize Firebase for the extra box feature.', error);
+    return null;
+  }
+
+  return firestoreInstance;
+}
+
+/**
+ * Fetches the current extra box count for the supplied player name.
+ * The result is cached so repeated lookups do not spam Firestore.
+ * @param {string} rawName
+ */
+async function lookupExtraBoxesForName(rawName) {
+  if (!latestDayNumber) {
+    return { count: 0, name: rawName };
+  }
+
+  const normalized = normalizePlayerName(rawName);
+  const cacheKey = `${latestDayNumber}:${normalized}`;
+  if (extraBoxCache.has(cacheKey)) {
+    return extraBoxCache.get(cacheKey);
+  }
+
+  const db = ensureFirestoreInstance();
+  if (!db) {
+    return { count: 0, name: rawName };
+  }
+
+  const playerDocRef = doc(db, 'extraBoxDays', `day_${latestDayNumber}`, 'players', normalized);
+  const snapshot = await getDoc(playerDocRef);
+  const result = {
+    name: rawName,
+    count: snapshot.exists() ? Number(snapshot.data()?.count ?? 0) : 0,
+  };
+  extraBoxCache.set(cacheKey, result);
+  return result;
+}
+
+/**
+ * Schedules a lookup when the player name input changes. A small timeout keeps
+ * Firestore traffic under control while still feeling responsive.
+ */
+function scheduleExtraBoxLookup() {
+  if (!extraBoxInput) {
+    return;
+  }
+  if (extraBoxLookupTimeoutId) {
+    window.clearTimeout(extraBoxLookupTimeoutId);
+  }
+  extraBoxLookupTimeoutId = window.setTimeout(() => {
+    extraBoxLookupTimeoutId = null;
+    handleExtraBoxLookup();
+  }, 280);
+}
+
+/**
+ * Loads the extra box count for the currently typed player name.
+ */
+async function handleExtraBoxLookup() {
+  if (!extraBoxInput) {
+    return;
+  }
+
+  const rawName = extraBoxInput.value.trim();
+  if (!rawName) {
+    updateExtraBoxSummary(0);
+    if (!window?.EXTRA_BOX_FIREBASE_CONFIG) {
+      setExtraBoxFeedback('Add your Firebase configuration to enable the extra box tracker.', 'info');
+    } else {
+      setExtraBoxFeedback('Enter your name to check your extra boxes.', 'info');
+    }
+    return;
+  }
+
+  if (!latestDayNumber) {
+    setExtraBoxFeedback('Waiting for the latest day to load…', 'info');
+    return;
+  }
+
+  const normalized = normalizePlayerName(rawName);
+  if (normalized.length < 2) {
+    setExtraBoxFeedback('Keep typing to find your player profile.', 'info');
+    return;
+  }
+
+  if (!ensureFirestoreInstance()) {
+    if (firebaseInitializationError) {
+      setExtraBoxFeedback('Firebase initialisation failed. Check the console for details.', 'error');
+    } else {
+      setExtraBoxFeedback('Connect Firebase in index.html to activate this feature.', 'info');
+    }
+    return;
+  }
+
+  try {
+    setExtraBoxFeedback('Checking your extra boxes…', 'info');
+    const { count } = await lookupExtraBoxesForName(rawName);
+    updateExtraBoxSummary(count);
+    const variant = count > 0 ? 'success' : 'info';
+    setExtraBoxFeedback(`Extra boxes for Day ${latestDayNumber}: ${count}`, variant);
+  } catch (error) {
+    console.error('Failed to load extra box information.', error);
+    setExtraBoxFeedback('Could not contact Firebase. Please try again shortly.', 'error');
+  }
+}
+
+/**
+ * Persists a new rewarded extra box entry for the active player.
+ * @param {string} rawName
+ */
+async function incrementExtraBoxCount(rawName) {
+  const db = ensureFirestoreInstance();
+  if (!db) {
+    throw new Error('Firebase is not configured.');
+  }
+
+  const normalized = normalizePlayerName(rawName);
+  const dayDocRef = doc(db, 'extraBoxDays', `day_${latestDayNumber}`);
+  const playerDocRef = doc(db, 'extraBoxDays', `day_${latestDayNumber}`, 'players', normalized);
+
+  const updatedCount = await runTransaction(db, async (transaction) => {
+    const snapshot = await transaction.get(playerDocRef);
+    const currentCount = snapshot.exists() ? Number(snapshot.data()?.count ?? 0) : 0;
+    const nextCount = currentCount + 1;
+
+    transaction.set(
+      dayDocRef,
+      {
+        dayNumber: latestDayNumber,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true },
+    );
+
+    transaction.set(
+      playerDocRef,
+      {
+        displayName: rawName,
+        normalizedName: normalized,
+        count: nextCount,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true },
+    );
+
+    return nextCount;
+  });
+
+  extraBoxCache.set(`${latestDayNumber}:${normalized}`, { name: rawName, count: updatedCount });
+  return updatedCount;
+}
+
+/**
+ * Displays the rewarded ad flow. The implementation delegates to
+ * window.requestExtraBoxAd which should be configured in index.html.
+ */
+function showRewardedAd() {
+  return new Promise((resolve, reject) => {
+    const handler = window?.requestExtraBoxAd;
+    if (typeof handler !== 'function') {
+      console.warn('window.requestExtraBoxAd is not defined – resolving immediately for development.');
+      resolve();
+      return;
+    }
+
+    let settled = false;
+    const cleanup = () => {
+      settled = true;
+    };
+
+    try {
+      const maybePromise = handler({
+        container: extraBoxRewardContainer,
+        onComplete: () => {
+          if (!settled) {
+            cleanup();
+            resolve();
+          }
+        },
+        onError: (error) => {
+          if (!settled) {
+            cleanup();
+            reject(error || new Error('Rewarded ad failed to finish.'));
+          }
+        },
+      });
+
+      if (maybePromise && typeof maybePromise.then === 'function') {
+        maybePromise.then(() => {
+          if (!settled) {
+            cleanup();
+            resolve();
+          }
+        });
+        if (typeof maybePromise.catch === 'function') {
+          maybePromise.catch((error) => {
+            if (!settled) {
+              cleanup();
+              reject(error);
+            }
+          });
+        }
+      }
+    } catch (error) {
+      if (!settled) {
+        cleanup();
+        reject(error);
+      }
+    }
+  });
+}
+
+/**
+ * Handles the submit button flow: validate, show rewarded ad, update Firebase,
+ * and finally refresh the page so banner ads rotate.
+ * @param {SubmitEvent} event
+ */
+async function handleExtraBoxSubmit(event) {
+  event.preventDefault();
+
+  if (!latestDayNumber) {
+    setExtraBoxFeedback('Leaderboard data has not loaded yet. Please try again in a moment.', 'error');
+    return;
+  }
+
+  const rawName = extraBoxInput?.value.trim();
+  if (!rawName) {
+    setExtraBoxFeedback('Please enter your player name before requesting an extra box.', 'error');
+    extraBoxInput?.focus();
+    return;
+  }
+
+  if (normalizePlayerName(rawName).length < 2) {
+    setExtraBoxFeedback('Player names must contain at least two characters.', 'error');
+    extraBoxInput?.focus();
+    return;
+  }
+
+  if (!ensureFirestoreInstance()) {
+    if (firebaseInitializationError) {
+      setExtraBoxFeedback('Firebase initialisation failed. Check the console for diagnostics.', 'error');
+    } else {
+      setExtraBoxFeedback('Connect Firebase in index.html before requesting extra boxes.', 'error');
+    }
+    return;
+  }
+
+  try {
+    setExtraBoxButtonLoading(true);
+    setExtraBoxFeedback('Loading the rewarded ad…', 'info');
+    await showRewardedAd();
+  } catch (error) {
+    console.error('Rewarded ad could not be displayed.', error);
+    setExtraBoxFeedback('The ad could not be displayed. Please try again.', 'error');
+    setExtraBoxButtonLoading(false);
+    return;
+  }
+
+  try {
+    setExtraBoxFeedback('Granting your extra box…', 'info');
+    const updatedCount = await incrementExtraBoxCount(rawName);
+    updateExtraBoxSummary(updatedCount);
+    setExtraBoxFeedback(`Success! You now have ${updatedCount} extra box(es) for Day ${latestDayNumber}.`, 'success');
+
+    window.setTimeout(() => {
+      window.location.reload();
+    }, 1500);
+  } catch (error) {
+    console.error('Failed to update the extra box count.', error);
+    setExtraBoxFeedback('We could not update your extra box count. Please try again later.', 'error');
+  } finally {
+    setExtraBoxButtonLoading(false);
+  }
+}
+
+/**
+ * Prepares the extra box section once the leaderboard JSON has been processed.
+ * @param {Array} dayStats
+ */
+function initializeExtraBoxFeature(dayStats) {
+  if (!extraBoxSection) {
+    return;
+  }
+
+  if (!Array.isArray(dayStats) || !dayStats.length) {
+    latestDayNumber = null;
+    setExtraBoxDay(null);
+    setExtraBoxFeedback('No leaderboard days available yet – extra boxes are paused.', 'info');
+    updateExtraBoxSummary(0);
+    return;
+  }
+
+  latestDayNumber = dayStats.reduce((max, day) => Math.max(max, day.day || 0), 0);
+  setExtraBoxDay(latestDayNumber);
+
+  if (!window?.EXTRA_BOX_FIREBASE_CONFIG) {
+    setExtraBoxFeedback('Add your Firebase configuration in index.html to activate extra boxes.', 'info');
+  } else {
+    setExtraBoxFeedback('Enter your name to check your extra boxes.', 'info');
+  }
+
+  if (extraBoxInput) {
+    extraBoxInput.addEventListener('input', scheduleExtraBoxLookup);
+    extraBoxInput.addEventListener('change', handleExtraBoxLookup);
+  }
+
+  if (extraBoxForm) {
+    extraBoxForm.addEventListener('submit', handleExtraBoxSubmit);
+  }
+
+  if (extraBoxRewardContainer && !extraBoxRewardContainer.textContent?.trim()) {
+    extraBoxRewardContainer.textContent =
+      'Your rewarded ad will load here. Configure window.requestExtraBoxAd in index.html.';
+  }
+
+  if (extraBoxInput?.value.trim()) {
+    handleExtraBoxLookup();
+  }
+}
+
+/**
+ * Boots the Google Ads banners by pushing empty configs into adsbygoogle once.
+ */
+function initializeGoogleAds() {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  window.adsbygoogle = window.adsbygoogle || [];
+  document.querySelectorAll('.adsbygoogle').forEach(() => {
+    try {
+      window.adsbygoogle.push({});
+    } catch (error) {
+      console.warn('Failed to load a Google ad slot.', error);
+    }
+  });
+}
+
 async function loadStats() {
   try {
     const response = await fetch(DATA_URL, { cache: 'no-cache' });
@@ -246,6 +706,7 @@ function initialize(dayStats) {
   renderOpenStats(sortedDays);
   buildPlayerIndex(sortedDays);
   populatePlayerSuggestions();
+  initializeExtraBoxFeature(sortedDays);
   startCanvasAnimation();
 }
 
@@ -721,4 +1182,5 @@ playerSearchInput.addEventListener('input', () => {
 sortFieldSelect.addEventListener('change', () => currentPlayer && renderPlayerResults(currentPlayer));
 sortOrderSelect.addEventListener('change', () => currentPlayer && renderPlayerResults(currentPlayer));
 
+initializeGoogleAds();
 loadStats();

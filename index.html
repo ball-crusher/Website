@@ -50,6 +50,9 @@
           <button type="button" class="quick-nav__button" data-scroll-target="player-stats">
             Player stats
           </button>
+          <button type="button" class="quick-nav__button" data-scroll-target="extra-box">
+            Extra box
+          </button>
         </div>
       </nav>
 
@@ -102,12 +105,133 @@
             </div>
           </div>
         </section>
+
+        <section id="extra-box" class="panel" aria-labelledby="extra-box-title">
+          <div class="panel__header">
+            <h2 id="extra-box-title" class="panel__title">Extra Box</h2>
+            <span class="panel__subtitle"
+              >Watch a rewarded ad to request an additional box for the latest leaderboard day</span
+            >
+          </div>
+
+          <!--
+            Extra box feature container. The card below holds the rewarded flow, the banner ads,
+            and the form that connects to Firebase. Comments describe the required integration steps
+            in detail so that the feature can be configured without reverse engineering the JS file.
+          -->
+          <article class="extra-box-card" aria-live="polite">
+            <div class="extra-box-card__ads">
+              <!--
+                Google Ads banner #1.
+                Replace the data-ad-client and data-ad-slot values with your AdSense identifiers.
+                The ads are activated programmatically in app.js once the Google Ads script loads.
+              -->
+              <div class="ads-banner">
+                <ins
+                  class="adsbygoogle"
+                  style="display: block"
+                  data-ad-client="ca-pub-XXXXXXXXXXXXXXXX"
+                  data-ad-slot="0000000001"
+                  data-ad-format="auto"
+                  data-full-width-responsive="true"
+                ></ins>
+              </div>
+
+              <!--
+                Google Ads banner #2 – works the same way as the first banner. Use a dedicated
+                slot ID so that both placements can be reported independently in your AdSense UI.
+              -->
+              <div class="ads-banner ads-banner--secondary">
+                <ins
+                  class="adsbygoogle"
+                  style="display: block"
+                  data-ad-client="ca-pub-XXXXXXXXXXXXXXXX"
+                  data-ad-slot="0000000002"
+                  data-ad-format="auto"
+                  data-full-width-responsive="true"
+                ></ins>
+              </div>
+            </div>
+
+            <form id="extra-box-form" class="extra-box-form" novalidate>
+              <div class="extra-box-form__field">
+                <label for="extra-box-player">
+                  Player name
+                  <input
+                    type="text"
+                    id="extra-box-player"
+                    name="extra-box-player"
+                    placeholder="e.g. player1"
+                    autocomplete="off"
+                    list="player-suggestions"
+                    required
+                  />
+                </label>
+              </div>
+
+              <!-- Summary row showing the extra box count that comes from Firebase -->
+              <div class="extra-box-form__summary" role="status" aria-live="polite">
+                <span class="extra-box-form__summary-label"
+                  >Extra boxes for Day <span id="extra-box-day-label">—</span>:</span
+                >
+                <strong id="extra-box-count-value" class="extra-box-form__summary-value">0</strong>
+              </div>
+
+              <!--
+                Feedback element that displays info, error, and success messages. The JS toggles the
+                modifier classes (e.g. extra-box__feedback--success) to style the message properly.
+              -->
+              <p id="extra-box-feedback" class="extra-box__feedback" hidden></p>
+
+              <button type="submit" id="extra-box-request" class="extra-box-form__button">
+                <span class="extra-box-form__button-label">Request box</span>
+                <span class="extra-box-form__button-progress" aria-hidden="true">Processing…</span>
+              </button>
+
+              <p class="extra-box-form__note">
+                You will be asked to watch a rewarded Google ad. After the ad finishes the Firebase
+                database is updated and the page reloads to fetch fresh banners.
+              </p>
+            </form>
+
+            <!--
+              Rewarded ad container. Attach your Google Publisher Tag or AdSense rewarded ad
+              implementation to the global window.requestExtraBoxAd handler (see the script below)
+              so that the JS can tell when the user finished watching an ad.
+            -->
+            <div id="extra-box-reward-ad" class="extra-box-reward" aria-live="polite"></div>
+          </article>
+        </section>
       </main>
 
       <footer class="page__footer">
         Data refreshes daily.
       </footer>
     </div>
+
+    <!--
+      Configuration block for the extra box feature.
+      1. Replace EXTRA_BOX_FIREBASE_CONFIG with your Firebase project credentials (projectId, apiKey, etc.).
+      2. Implement window.requestExtraBoxAd so that it shows a rewarded Google ad and calls onComplete()
+         once the reward is granted. See app.js for the expected callback contract.
+      3. Update the Google Ads banner slots above with production ad unit IDs.
+    -->
+    <script>
+      window.EXTRA_BOX_FIREBASE_CONFIG = null; // TODO: Paste your Firebase configuration object here.
+
+      // TODO: Implement the rewarded ad logic and call onComplete() after the reward is issued.
+      // window.requestExtraBoxAd = ({ container, onComplete, onError }) => {
+      //   // Example stub – replace with Google Ad Manager / AdSense rewarded implementation.
+      //   onComplete();
+      // };
+    </script>
+
+    <!-- Google Ads loader. Replace the client ID with your own publisher account identifier. -->
+    <script
+      async
+      src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-XXXXXXXXXXXXXXXX"
+      crossorigin="anonymous"
+    ></script>
 
     <script src="assets/js/app.js" type="module"></script>
   </body>
