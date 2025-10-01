@@ -236,6 +236,10 @@ a:focus {
   backdrop-filter: blur(calc(18px * var(--elevation-scale)));
 }
 
+.panel[hidden] {
+  display: none !important;
+}
+
 .panel__header {
   display: grid;
   gap: calc(0.55rem * var(--spacing-scale));
@@ -257,9 +261,76 @@ a:focus {
   color: var(--text-muted);
 }
 
+.panel__notice {
+  margin: 0 0 calc(1.1rem * var(--spacing-scale));
+  padding: calc(0.85rem * var(--spacing-scale));
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(250, 204, 21, 0.45);
+  background: rgba(250, 204, 21, 0.1);
+  color: #fcd34d;
+  font-size: clamp(calc(0.85rem * var(--font-scale)),
+      calc((0.8rem + 0.28vw) * var(--font-scale)), calc(0.95rem * var(--font-scale)));
+  line-height: 1.6;
+}
+
 .card-grid {
   display: grid;
   gap: calc(1.1rem * var(--spacing-scale));
+}
+
+.loading-block {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(0.75rem * var(--spacing-scale));
+  padding: calc(0.8rem * var(--spacing-scale)) calc(1.1rem * var(--spacing-scale));
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(15, 23, 42, 0.72);
+  margin-bottom: calc(1.2rem * var(--spacing-scale));
+  color: var(--text-secondary);
+  font-size: clamp(calc(0.82rem * var(--font-scale)),
+      calc((0.76rem + 0.3vw) * var(--font-scale)), calc(0.95rem * var(--font-scale)));
+}
+
+.loading-block[hidden] {
+  display: none;
+}
+
+.spinner {
+  width: clamp(1.25rem, 3.6vw, 1.75rem);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  border: 2px solid rgba(148, 163, 184, 0.4);
+  border-top-color: rgba(14, 165, 233, 0.85);
+  animation: spin 0.85s linear infinite;
+}
+
+.loading-block__label {
+  white-space: nowrap;
+}
+
+.inline-loader {
+  display: flex;
+  align-items: center;
+  gap: calc(0.65rem * var(--spacing-scale));
+  color: var(--text-muted);
+  font-size: clamp(calc(0.8rem * var(--font-scale)),
+      calc((0.74rem + 0.28vw) * var(--font-scale)), calc(0.92rem * var(--font-scale)));
+  padding: calc(0.3rem * var(--spacing-scale)) 0;
+}
+
+.inline-loader .spinner {
+  width: clamp(0.9rem, 2.6vw, 1.1rem);
+  border-width: 2px;
+}
+
+@keyframes spin {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
 }
 
 .day-card {
@@ -370,6 +441,18 @@ a:focus {
 
 .details-button[aria-expanded='true']::after {
   transform: rotate(90deg);
+}
+
+.heavy-warning {
+  margin: 0;
+  padding: calc(0.75rem * var(--spacing-scale));
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(250, 204, 21, 0.38);
+  background: rgba(250, 204, 21, 0.08);
+  color: #facc15;
+  font-size: clamp(calc(0.78rem * var(--font-scale)),
+      calc((0.72rem + 0.24vw) * var(--font-scale)), calc(0.9rem * var(--font-scale)));
+  line-height: 1.55;
 }
 
 .collapse {
