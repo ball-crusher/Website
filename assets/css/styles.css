@@ -119,33 +119,31 @@ a:focus {
   color: var(--text-secondary);
 }
 
-.hero__visual {
-  margin: 0;
-  padding: calc(1.2rem * var(--spacing-scale));
+.hero__highlight {
   border-radius: var(--radius-lg);
   border: 1px solid rgba(56, 189, 248, 0.25);
   background: var(--surface);
   box-shadow: var(--shadow-soft);
+  padding: calc(1.2rem * var(--spacing-scale));
   display: grid;
-  gap: calc(0.85rem * var(--spacing-scale));
+  gap: calc(0.65rem * var(--spacing-scale));
 }
 
-.hero__visual canvas {
-  width: 100%;
-  height: auto;
-  aspect-ratio: 10 / 7;
-  display: block;
-  border-radius: var(--radius-md);
-  background: rgba(148, 163, 184, 0.08);
-  max-height: calc(var(--viewport-height, 100vh) * 0.34);
-}
-
-.hero__hint {
+.hero__highlight-title {
   margin: 0;
-  font-size: calc(0.78rem * var(--font-scale));
-  letter-spacing: 0.18em;
+  font-size: clamp(calc(1.1rem * var(--font-scale)), calc(3.4vw * var(--font-scale)),
+      calc(1.35rem * var(--font-scale)));
+  font-weight: 600;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--text-muted);
+  color: var(--accent-strong);
+}
+
+.hero__highlight-text {
+  margin: 0;
+  font-size: calc(0.95rem * var(--font-scale));
+  line-height: 1.55;
+  color: var(--text-secondary);
 }
 
 .quick-nav {
@@ -236,6 +234,10 @@ a:focus {
   backdrop-filter: blur(calc(18px * var(--elevation-scale)));
 }
 
+.panel + .panel {
+  margin-top: calc(2.4rem * var(--spacing-scale));
+}
+
 .panel__header {
   display: grid;
   gap: calc(0.55rem * var(--spacing-scale));
@@ -260,6 +262,39 @@ a:focus {
 .card-grid {
   display: grid;
   gap: calc(1.1rem * var(--spacing-scale));
+}
+
+.card-grid[aria-busy='true'] {
+  opacity: 0.35;
+  pointer-events: none;
+  transition: opacity 180ms ease;
+}
+
+.loader {
+  display: grid;
+  place-items: center;
+  padding: calc(2.4rem * var(--spacing-scale)) 0;
+  color: var(--text-secondary);
+  font-size: calc(0.95rem * var(--font-scale));
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.loader::after {
+  content: '';
+  width: 2.2rem;
+  height: 2.2rem;
+  margin-top: calc(1rem * var(--spacing-scale));
+  border-radius: 50%;
+  border: 3px solid rgba(14, 165, 233, 0.25);
+  border-top-color: rgba(14, 165, 233, 0.85);
+  animation: spin 880ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .day-card {
@@ -324,6 +359,22 @@ a:focus {
   font-size: clamp(calc(0.82rem * var(--font-scale)),
       calc((0.78rem + 0.2vw) * var(--font-scale)), calc(0.92rem * var(--font-scale)));
   color: var(--text-muted);
+}
+
+.winner-time {
+  font-variant-numeric: tabular-nums;
+}
+
+.day-card-warning {
+  margin: 0;
+  padding: calc(0.75rem * var(--spacing-scale));
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(250, 204, 21, 0.36);
+  background: rgba(161, 98, 7, 0.18);
+  color: rgba(252, 211, 77, 0.95);
+  font-size: clamp(calc(0.75rem * var(--font-scale)),
+      calc((0.72rem + 0.18vw) * var(--font-scale)), calc(0.88rem * var(--font-scale)));
+  line-height: 1.5;
 }
 
 .winner-rectangles {
@@ -394,23 +445,22 @@ a:focus {
 }
 
 .player-list li {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: calc(0.75rem * var(--spacing-scale));
-  padding: calc(0.85rem * var(--spacing-scale)) calc(0.95rem * var(--spacing-scale));
+  display: grid;
+  gap: calc(0.55rem * var(--spacing-scale));
+  padding: calc(0.9rem * var(--spacing-scale)) calc(0.95rem * var(--spacing-scale));
   border-radius: var(--radius-sm);
-  background: rgba(2, 6, 23, 0.6);
+  background: rgba(2, 6, 23, 0.65);
   border: 1px solid rgba(148, 163, 184, 0.18);
-  font-size: clamp(calc(0.92rem * var(--font-scale)),
-      calc((0.88rem + 0.28vw) * var(--font-scale)), calc(1.06rem * var(--font-scale)));
+  font-size: clamp(calc(0.88rem * var(--font-scale)),
+      calc((0.84rem + 0.24vw) * var(--font-scale)), calc(1.02rem * var(--font-scale)));
 }
 
 .player-name {
   display: flex;
   align-items: center;
   gap: calc(0.55rem * var(--spacing-scale));
-  font-weight: 500;
+  font-weight: 600;
+  flex-wrap: wrap;
 }
 
 .player-name strong {
