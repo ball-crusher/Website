@@ -27,42 +27,58 @@
               Here you can check your daily stats. This is just a pre-release version, so please be patient if you encounter any bugs — we’re working on fixing them soon!
             </p>
           </div>
-          <figure class="hero__visual">
-            <canvas
-              id="statsCanvas"
-              width="480"
-              height="320"
-              aria-label="Animated winner timeline"
-            ></canvas>
-            <figcaption class="hero__hint">Live winner timeline</figcaption>
-          </figure>
+          <!-- The animated canvas used to live here; we now keep the hero ultra-lightweight
+               so that first paint on low-end phones happens instantly. -->
         </div>
       </header>
 
       <nav class="quick-nav" aria-label="Phone navigation">
         <div class="quick-nav__container">
-          <button type="button" class="quick-nav__button" data-scroll-target="hero" aria-pressed="true">
-            Overview
-          </button>
-          <button type="button" class="quick-nav__button" data-scroll-target="open-stats">
+          <button
+            type="button"
+            class="quick-nav__button"
+            data-view-target="open"
+            aria-pressed="true"
+          >
             Open stats
           </button>
-          <button type="button" class="quick-nav__button" data-scroll-target="player-stats">
+          <button type="button" class="quick-nav__button" data-view-target="players" aria-pressed="false">
             Player stats
           </button>
         </div>
       </nav>
 
       <main class="main" id="content">
-        <section id="open-stats" class="panel" aria-labelledby="open-stats-title">
+        <!-- Open stats view: default screen that only renders winner previews. -->
+        <section
+          id="open-stats"
+          class="panel"
+          data-view="open"
+          aria-labelledby="open-stats-title"
+        >
           <div class="panel__header">
             <h2 id="open-stats-title" class="panel__title">Open Stats</h2>
             <span class="panel__subtitle">Tap any day to open a leaderboard</span>
           </div>
+          <p class="panel__notice" role="note">
+            ⚠️ Viewing the full leaderboard can stress older phones. Only the winner loads first;
+            use “View more” with caution.
+          </p>
+          <div class="loading-block" id="open-stats-loading" role="status" aria-live="polite">
+            <span class="spinner" aria-hidden="true"></span>
+            <span class="loading-block__label">Loading winners…</span>
+          </div>
           <div id="open-stats-grid" class="card-grid" role="list"></div>
         </section>
 
-        <section id="player-stats" class="panel" aria-labelledby="player-stats-title">
+        <!-- Player stats view: kept hidden until explicitly activated to avoid heavy work. -->
+        <section
+          id="player-stats"
+          class="panel"
+          data-view="players"
+          aria-labelledby="player-stats-title"
+          hidden
+        >
           <div class="panel__header">
             <h2 id="player-stats-title" class="panel__title">Player Stats</h2>
             <span class="panel__subtitle">Search any athlete and auto-scale their daily stats</span>
