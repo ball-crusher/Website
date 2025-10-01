@@ -44,6 +44,9 @@
           <button type="button" class="quick-nav__button" data-scroll-target="hero" aria-pressed="true">
             Overview
           </button>
+          <button type="button" class="quick-nav__button" data-scroll-target="request-box">
+            Request box
+          </button>
           <button type="button" class="quick-nav__button" data-scroll-target="open-stats">
             Open stats
           </button>
@@ -54,6 +57,66 @@
       </nav>
 
       <main class="main" id="content">
+        <!-- Request box interaction panel -->
+        <section id="request-box" class="panel" aria-labelledby="request-box-title">
+          <div class="panel__header">
+            <h2 id="request-box-title" class="panel__title">Request a Box</h2>
+            <span class="panel__subtitle"
+              >Add yourself to the Firebase-powered request queue and keep an eye on your live box count.</span
+            >
+          </div>
+          <form id="request-box-form" class="request-box" novalidate>
+            <div class="request-box__controls">
+              <label for="request-box-name" class="request-box__label">
+                Display name
+                <input
+                  type="text"
+                  id="request-box-name"
+                  name="request-box-name"
+                  autocomplete="name"
+                  maxlength="60"
+                  placeholder="e.g. PlayerOne"
+                  required
+                />
+                <span class="request-box__hint"
+                  >We store your latest request in Firebase together with a timestamp so the team can keep track.</span
+                >
+              </label>
+              <button type="submit" id="request-box-button" class="request-box__button" disabled>
+                Request Box
+              </button>
+            </div>
+            <div class="request-box__status" aria-live="polite">
+              <p class="request-box__count">
+                You currently own
+                <strong id="request-box-count" data-default-count>0</strong>
+                box<span id="request-box-count-plural" aria-hidden="true">es</span>.
+              </p>
+              <p id="request-box-error" class="request-box__error" role="alert" aria-live="assertive" hidden></p>
+            </div>
+            <div class="request-box__actions">
+              <p class="request-box__note">
+                Clicking the button signs you in anonymously with Firebase Auth, stores your name in the Realtime Database
+                and increases your total box counter.
+              </p>
+              <p class="request-box__note">
+                An ad will appear only after a successful request, matching Google AdSense policies for user interactions.
+              </p>
+            </div>
+            <div id="request-box-ad" class="request-box__ad" hidden>
+              <!-- The AdSense snippet is injected dynamically from JavaScript once the user successfully submits the form. -->
+              <ins
+                class="adsbygoogle"
+                style="display: block"
+                data-ad-client="ca-pub-XXXXXXXXXXXXXXXX"
+                data-ad-slot="0000000000"
+                data-ad-format="auto"
+                data-full-width-responsive="true"
+              ></ins>
+            </div>
+          </form>
+        </section>
+
         <section id="open-stats" class="panel" aria-labelledby="open-stats-title">
           <div class="panel__header">
             <h2 id="open-stats-title" class="panel__title">Open Stats</h2>
