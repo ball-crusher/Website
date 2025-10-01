@@ -27,15 +27,12 @@
               Here you can check your daily stats. This is just a pre-release version, so please be patient if you encounter any bugs — we’re working on fixing them soon!
             </p>
           </div>
-          <figure class="hero__visual">
-            <canvas
-              id="statsCanvas"
-              width="480"
-              height="320"
-              aria-label="Animated winner timeline"
-            ></canvas>
-            <figcaption class="hero__hint">Live winner timeline</figcaption>
-          </figure>
+          <div class="hero__highlight" role="presentation">
+            <p class="hero__highlight-title">Blazing-fast mobile stats</p>
+            <p class="hero__highlight-text">
+              Optimised for phones with instant winner insights and optional deep dives.
+            </p>
+          </div>
         </div>
       </header>
 
@@ -59,7 +56,10 @@
             <h2 id="open-stats-title" class="panel__title">Open Stats</h2>
             <span class="panel__subtitle">Tap any day to open a leaderboard</span>
           </div>
-          <div id="open-stats-grid" class="card-grid" role="list"></div>
+          <div id="open-stats-loader" class="loader" role="status" aria-live="polite">
+            Loading daily winners…
+          </div>
+          <div id="open-stats-grid" class="card-grid" role="list" aria-busy="true"></div>
         </section>
 
         <section id="player-stats" class="panel" aria-labelledby="player-stats-title">
