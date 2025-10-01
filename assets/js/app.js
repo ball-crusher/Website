@@ -1,4 +1,8 @@
-const DATA_URL = 'data/day_stats.json';
+// Die Datensätze sind in zwei getrennten Dateien abgelegt, damit wir bei der
+// ersten Ansicht nur sehr wenige Bytes laden müssen. Das reduziert die
+// Startzeit insbesondere auf mobilen Geräten deutlich.
+const WINNER_DATA_URL = 'data/day_winners.json';
+const FULL_DATA_URL = 'data/day_stats.json';
 
 const root = document.documentElement;
 const openStatsGrid = document.getElementById('open-stats-grid');
@@ -7,7 +11,8 @@ const playerResultsContainer = document.getElementById('player-results');
 const playerSuggestions = document.getElementById('player-suggestions');
 const sortFieldSelect = document.getElementById('sort-field');
 const sortOrderSelect = document.getElementById('sort-order');
-const canvas = document.getElementById('statsCanvas');
+const openStatsLoading = document.getElementById('open-stats-loading');
+const playerLoading = document.getElementById('player-loading');
 const quickNav = document.querySelector('.quick-nav');
 const quickNavButtons = quickNav
   ? Array.from(quickNav.querySelectorAll('.quick-nav__button'))
@@ -21,11 +26,12 @@ const lastAppliedMetrics = {
 
 let playerIndex = new Map();
 let currentPlayer = null;
-let winnerTimeline = [];
-let canvasAnimationId = null;
-let canvasResizeHandler = null;
 let quickNavObserver = null;
 let metricsFrameId = null;
+let fullDataPromise = null;
+let fullDataCache = null;
+let ensurePlayerDataPromise = null;
+let dayLookup = new Map();
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -222,57 +228,58 @@ function setupQuickNav() {
 
 setupQuickNav();
 
-async function loadStats() {
-  try {
-    const response = await fetch(DATA_URL, { cache: 'no-cache' });
-    if (!response.ok) {
-      throw new Error(`Failed to load stats (${response.status})`);
-    }
-    const data = await response.json();
-    if (!data || !Array.isArray(data.day_stats)) {
-      throw new Error('Unexpected data format');
-    }
-    initialize(data.day_stats);
-  } catch (error) {
-    console.error(error);
-    openStatsGrid.innerHTML = `<p class="no-results">${error.message}. Check the JSON endpoint.</p>`;
-    playerResultsContainer.innerHTML = `<p class="no-results">${error.message}. Player search unavailable.</p>`;
-  }
-}
-
-function initialize(dayStats) {
-  const sortedDays = [...dayStats].sort((a, b) => b.day - a.day);
-  winnerTimeline = buildWinnerTimeline(sortedDays);
-  renderOpenStats(sortedDays);
-  buildPlayerIndex(sortedDays);
-  populatePlayerSuggestions();
-  startCanvasAnimation();
-}
-
-function buildWinnerTimeline(days) {
-  return days
-    .map((day) => {
-      const winner = [...day.players].sort((a, b) => a.rank - b.rank)[0];
-      if (!winner) return null;
-      return {
-        day: day.day,
-        name: winner.name,
-        time: winner.time,
-        seconds: parseTimeToSeconds(winner.time),
-      };
-    })
-    .filter(Boolean)
-    .sort((a, b) => a.day - b.day);
-}
-
-function renderOpenStats(days) {
-  openStatsGrid.innerHTML = '';
-  if (!days.length) {
-    openStatsGrid.innerHTML = '<p class="no-results">No days available yet.</p>';
+// Kleine Hilfsroutine, um Spinner sicht- und unsichtbar zu machen.
+function showLoading(element, show = true) {
+  if (!element) {
     return;
   }
+  element.hidden = !show;
+}
 
-  days.forEach((day) => {
+// Einheitliche Fehlerausgabe, damit Fehlermeldungen überall gleich aussehen.
+function renderError(container, message) {
+  if (container) {
+    container.innerHTML = `<p class="no-results">${message}</p>`;
+  }
+}
+
+// Schlanke Fetch-Hilfe mit sprechenden Fehlern, damit wir Logging und UX verbessern können.
+async function fetchJson(url, errorLabel) {
+  const response = await fetch(url, { cache: 'no-cache' });
+  if (!response.ok) {
+    throw new Error(`${errorLabel} (${response.status})`);
+  }
+  return response.json();
+}
+
+async function loadWinnerSummaries() {
+  showLoading(openStatsLoading, true);
+  openStatsGrid.innerHTML = '';
+
+  try {
+    // Erst nur die kleinste Gewinner-Zusammenfassung laden – das geht schnell und ist leichtgewichtig.
+    const data = await fetchJson(WINNER_DATA_URL, 'Konnte Gewinnerdaten nicht laden');
+    const winners = Array.isArray(data?.day_winners) ? data.day_winners : [];
+    if (!winners.length) {
+      renderError(openStatsGrid, 'Keine Gewinner gefunden.');
+      return;
+    }
+    renderOpenStats(winners);
+  } catch (error) {
+    console.error(error);
+    renderError(openStatsGrid, `${error.message}. Bitte Datenquelle prüfen.`);
+    renderError(
+      playerResultsContainer,
+      'Spieler-Suche ist ohne komplette Daten leider nicht möglich.',
+    );
+  } finally {
+    showLoading(openStatsLoading, false);
+  }
+}
+
+function renderOpenStats(winners) {
+  openStatsGrid.innerHTML = '';
+  winners.forEach((entry) => {
     const card = document.createElement('article');
     card.className = 'day-card';
     card.setAttribute('role', 'listitem');
@@ -282,91 +289,46 @@ function renderOpenStats(days) {
 
     const label = document.createElement('div');
     label.className = 'day-label';
-    label.textContent = `Day ${day.day}`;
+    label.textContent = `Day ${entry.day}`;
 
     const winnerInfo = document.createElement('div');
     winnerInfo.className = 'winner';
-    const topPlayer = [...day.players].sort((a, b) => a.rank - b.rank)[0];
+
     const winnerLink = document.createElement('a');
-    winnerLink.href = buildInstagramLink(topPlayer?.name);
+    winnerLink.href = buildInstagramLink(entry?.winner?.name);
     winnerLink.target = '_blank';
     winnerLink.rel = 'noopener noreferrer';
-    winnerLink.textContent = topPlayer ? topPlayer.name : '—';
+    winnerLink.textContent = entry?.winner?.name || '—';
 
     const winnerLabel = document.createElement('span');
     winnerLabel.textContent = 'Daily winner';
     winnerInfo.append(winnerLink, winnerLabel);
 
-    if (topPlayer) {
-      const winnerRectangles = document.createElement('span');
-      winnerRectangles.className = 'winner-rectangles';
-      winnerRectangles.textContent = `Rectangles: ${resolveBoxCount(topPlayer)}`;
-      winnerInfo.append(winnerRectangles);
+    if (entry?.winner) {
+      const rectangles = document.createElement('span');
+      rectangles.className = 'winner-rectangles';
+      rectangles.textContent = `Rectangles: ${resolveBoxCount(entry.winner)}`;
+      winnerInfo.append(rectangles);
     }
 
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'details-button';
-    button.textContent = 'More details';
+    button.textContent = 'View More';
+    button.dataset.day = String(entry.day);
     button.setAttribute('aria-expanded', 'false');
 
     header.append(label, winnerInfo, button);
 
     const collapse = document.createElement('div');
     collapse.className = 'collapse';
-    const collapseId = `day-${day.day}-details`;
-    collapse.id = collapseId;
     collapse.hidden = true;
+    const collapseId = `day-${entry.day}-details`;
+    collapse.id = collapseId;
     button.setAttribute('aria-controls', collapseId);
 
-    const list = document.createElement('ul');
-    list.className = 'player-list';
-
-    [...day.players]
-      .sort((a, b) => a.rank - b.rank)
-      .forEach((player) => {
-        const item = document.createElement('li');
-
-        const left = document.createElement('div');
-        left.className = 'player-name';
-        left.innerHTML = `<strong>${ordinal(player.rank)}</strong> &nbsp; <a href="${buildInstagramLink(
-          player.name
-        )}" target="_blank" rel="noopener noreferrer">${player.name}</a>`;
-
-        const right = document.createElement('span');
-        right.className = 'player-time';
-        right.textContent = `Time: ${player.time} • Rectangles: ${resolveBoxCount(player)}`;
-
-        item.append(left, right);
-        list.append(item);
-      });
-
-    collapse.append(list);
-
     button.addEventListener('click', () => {
-      const isOpen = collapse.classList.toggle('open');
-      collapse.hidden = !isOpen;
-      button.setAttribute('aria-expanded', String(isOpen));
-      button.textContent = isOpen ? 'Hide details' : 'More details';
-
-      if (isOpen) {
-        document.querySelectorAll('.collapse.open').forEach((openSection) => {
-          if (openSection === collapse) return;
-          openSection.classList.remove('open');
-          openSection.hidden = true;
-          const toggle = openSection.previousElementSibling?.querySelector?.('.details-button');
-          if (toggle) {
-            toggle.setAttribute('aria-expanded', 'false');
-            toggle.textContent = 'More details';
-          }
-        });
-
-        if (typeof collapse.scrollIntoView === 'function') {
-          requestAnimationFrame(() => {
-            collapse.scrollIntoView({ block: 'start', behavior: 'smooth' });
-          });
-        }
-      }
+      toggleDayDetails({ day: entry.day, collapse, button });
     });
 
     card.append(header, collapse);
@@ -374,7 +336,201 @@ function renderOpenStats(days) {
   });
 }
 
+const DETAILS_WARNING_MESSAGE =
+  'Warnung: Das vollständige Leaderboard kann sehr umfangreich sein und dein Gerät belasten. Möchtest du fortfahren?';
+
+async function toggleDayDetails({ day, collapse, button }) {
+  if (!collapse || !button) {
+    return;
+  }
+
+  if (collapse.classList.contains('open')) {
+    collapse.classList.remove('open');
+    collapse.hidden = true;
+    button.setAttribute('aria-expanded', 'false');
+    button.textContent = 'View More';
+    return;
+  }
+
+  if (!button.dataset.warningAcknowledged) {
+    // Vor dem ersten Öffnen warnen wir, damit Nutzer bewusst entscheiden können.
+    const proceed = window.confirm(DETAILS_WARNING_MESSAGE);
+    if (!proceed) {
+      return;
+    }
+    button.dataset.warningAcknowledged = 'true';
+  }
+
+  // Andere geöffnete Leaderboards schließen, um RAM und Scrollhöhe zu sparen.
+  document.querySelectorAll('.collapse.open').forEach((section) => {
+    if (section === collapse) {
+      return;
+    }
+    section.classList.remove('open');
+    section.hidden = true;
+    const trigger = section.previousElementSibling?.querySelector?.('.details-button');
+    if (trigger) {
+      trigger.setAttribute('aria-expanded', 'false');
+      trigger.textContent = 'View More';
+    }
+  });
+
+  collapse.hidden = false;
+  collapse.classList.add('open');
+  button.setAttribute('aria-expanded', 'true');
+  button.textContent = 'Hide details';
+
+  if (collapse.dataset.loaded === 'true') {
+    if (typeof collapse.scrollIntoView === 'function') {
+      requestAnimationFrame(() => {
+        collapse.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      });
+    }
+    return;
+  }
+
+  collapse.innerHTML = `
+    <div class="loading-indicator loading-indicator--inline">
+      <span class="loading-indicator__spinner" aria-hidden="true"></span>
+      <span class="loading-indicator__label">Lade komplettes Leaderboard…</span>
+    </div>
+  `;
+
+  try {
+    // Jetzt erst das große JSON nachladen und rendern.
+    const dayData = await loadDayData(day);
+    renderDayDetails(collapse, dayData);
+    collapse.dataset.loaded = 'true';
+  } catch (error) {
+    console.error(error);
+    collapse.innerHTML = `<p class="no-results">${error.message || 'Konnte Details nicht laden.'}</p>`;
+    collapse.dataset.loaded = 'error';
+  }
+
+  if (typeof collapse.scrollIntoView === 'function') {
+    requestAnimationFrame(() => {
+      collapse.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    });
+  }
+}
+
+async function loadDayData(day) {
+  const allDays = await ensureFullData();
+  const numericDay = Number(day);
+  const dayData = dayLookup.get(numericDay);
+  if (dayData) {
+    return dayData;
+  }
+
+  const fallback = allDays.find((entry) => Number(entry.day) === numericDay);
+  if (!fallback) {
+    throw new Error('Keine Detaildaten für diesen Tag gefunden.');
+  }
+  dayLookup.set(numericDay, fallback);
+  return fallback;
+}
+
+async function ensureFullData() {
+  if (fullDataCache) {
+    return fullDataCache;
+  }
+  if (fullDataPromise) {
+    return fullDataPromise;
+  }
+
+  fullDataPromise = (async () => {
+    // Die vollständigen Daten holen wir nur bei Bedarf, speichern sie danach aber im Speicher.
+    const data = await fetchJson(FULL_DATA_URL, 'Konnte vollständige Daten nicht laden');
+    const days = Array.isArray(data?.day_stats) ? data.day_stats : [];
+    if (!days.length) {
+      throw new Error('Keine vollständigen Statistiken verfügbar.');
+    }
+    const sorted = [...days].sort((a, b) => b.day - a.day);
+    prepareDayLookup(sorted);
+    fullDataCache = sorted;
+    return sorted;
+  })();
+
+  try {
+    return await fullDataPromise;
+  } finally {
+    fullDataPromise = null;
+  }
+}
+
+function prepareDayLookup(days) {
+  dayLookup = new Map();
+  days.forEach((day) => {
+    const key = Number(day.day);
+    if (!Number.isNaN(key)) {
+      dayLookup.set(key, day);
+    }
+  });
+}
+
+function renderDayDetails(collapse, dayData) {
+  collapse.innerHTML = '';
+  const list = document.createElement('ul');
+  list.className = 'player-list';
+
+  // Wir sortieren strikt nach Rang, damit alle Geräte exakt dieselbe Reihenfolge sehen.
+  [...dayData.players]
+    .sort((a, b) => a.rank - b.rank)
+    .forEach((player) => {
+      const item = document.createElement('li');
+
+      const left = document.createElement('div');
+      left.className = 'player-name';
+      left.innerHTML = `<strong>${ordinal(player.rank)}</strong> &nbsp; <a href="${buildInstagramLink(
+        player.name,
+      )}" target="_blank" rel="noopener noreferrer">${player.name}</a>`;
+
+      const right = document.createElement('span');
+      right.className = 'player-time';
+      right.textContent = `Time: ${player.time} • Rectangles: ${resolveBoxCount(player)}`;
+
+      item.append(left, right);
+      list.append(item);
+    });
+
+  collapse.append(list);
+}
+
+async function ensurePlayerData() {
+  if (playerIndex.size) {
+    return true;
+  }
+  if (ensurePlayerDataPromise) {
+    return ensurePlayerDataPromise;
+  }
+
+  ensurePlayerDataPromise = (async () => {
+    showLoading(playerLoading, true);
+    try {
+      const days = await ensureFullData();
+      buildPlayerIndex(days);
+      populatePlayerSuggestions();
+      return true;
+    } catch (error) {
+      console.error(error);
+      renderError(
+        playerResultsContainer,
+        `${error.message}. Spieler-Suche derzeit nicht verfügbar.`,
+      );
+      return false;
+    } finally {
+      showLoading(playerLoading, false);
+      ensurePlayerDataPromise = null;
+    }
+  })();
+
+  return ensurePlayerDataPromise;
+}
+
 function buildPlayerIndex(days) {
+  // Wir halten hier eine schlanke Suchstruktur bereit, die nur gebaut wird,
+  // wenn jemand wirklich nach Spielern sucht. Jeder Spielername wird als
+  // Kleinbuchstaben-Schlüssel abgelegt und enthält alle Auftritte.
   playerIndex = new Map();
 
   days.forEach((day) => {
@@ -399,6 +555,10 @@ function buildPlayerIndex(days) {
 }
 
 function populatePlayerSuggestions() {
+  if (!playerSuggestions) {
+    return;
+  }
+
   playerSuggestions.innerHTML = '';
   const sortedPlayers = Array.from(playerIndex.values())
     .map((entry) => entry.name)
@@ -411,12 +571,17 @@ function populatePlayerSuggestions() {
   });
 }
 
-function updatePlayerResults(options = {}) {
+async function updatePlayerResults(options = {}) {
   const { silentOnNoMatch = false } = options;
   const query = playerSearchInput.value.trim();
   if (!query) {
     currentPlayer = null;
     playerResultsContainer.innerHTML = '<p class="no-results">Search for a player to see results.</p>';
+    return;
+  }
+
+  const ready = await ensurePlayerData();
+  if (!ready) {
     return;
   }
 
@@ -511,175 +676,6 @@ function renderPlayerResults(entry) {
   });
 }
 
-function startCanvasAnimation() {
-  if (canvasAnimationId) {
-    cancelAnimationFrame(canvasAnimationId);
-    canvasAnimationId = null;
-  }
-
-  if (canvasResizeHandler) {
-    window.removeEventListener('resize', canvasResizeHandler);
-    if (window.visualViewport) {
-      window.visualViewport.removeEventListener('resize', canvasResizeHandler);
-      window.visualViewport.removeEventListener('scroll', canvasResizeHandler);
-    }
-    canvasResizeHandler = null;
-  }
-
-  if (!canvas || !canvas.getContext || !winnerTimeline.length) {
-    return;
-  }
-
-  const ctx = canvas.getContext('2d');
-  const times = winnerTimeline.map((entry) => entry.seconds).filter((value) => Number.isFinite(value));
-  const minTime = times.length ? Math.min(...times) : 0;
-  const maxTime = times.length ? Math.max(...times) : 1;
-  const dayCount = winnerTimeline.length;
-  const duration = 10000;
-  let width = canvas.clientWidth || canvas.width;
-  let height = canvas.clientHeight || canvas.height;
-  let padding = 24;
-  let stepX = 0;
-  let start = null;
-  let labelFontSize = 14;
-
-  function configureDimensions() {
-    const parentWidth = canvas.parentElement?.clientWidth || window.innerWidth || 360;
-    const styles = getComputedStyle(root);
-    const layoutMax = parseFloat(styles.getPropertyValue('--layout-max-width')) || parentWidth;
-    const viewportWidth = parseFloat(styles.getPropertyValue('--viewport-width')) || parentWidth;
-    const viewportHeight = parseFloat(styles.getPropertyValue('--viewport-height')) || window.innerHeight || 640;
-    const spacingScale = parseFloat(styles.getPropertyValue('--spacing-scale')) || 1;
-    const fontScale = parseFloat(styles.getPropertyValue('--font-scale')) || 1;
-    const maxWidth = Math.min(layoutMax, viewportWidth * 0.96);
-    const cssWidth = Math.min(parentWidth, Math.max(280, maxWidth));
-    const cssHeight = clamp(Math.round(cssWidth * 0.64), 200, Math.round(viewportHeight * 0.42));
-    const dpr = window.devicePixelRatio || 1;
-
-    canvas.style.width = `${cssWidth}px`;
-    canvas.style.height = `${cssHeight}px`;
-    canvas.width = Math.round(cssWidth * dpr);
-    canvas.height = Math.round(cssHeight * dpr);
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-    width = cssWidth;
-    height = cssHeight;
-    padding = Math.max(Math.round(18 * spacingScale), Math.round(cssWidth * 0.1));
-    stepX = dayCount > 1 ? (width - padding * 2) / (dayCount - 1) : 0;
-    labelFontSize = Math.round(clamp(14 * fontScale, 12, 18));
-  }
-
-  function mapY(seconds) {
-    if (!Number.isFinite(seconds)) {
-      return height / 2;
-    }
-    if (maxTime === minTime) {
-      return height / 2;
-    }
-    const normalized = (seconds - minTime) / (maxTime - minTime);
-    return height - padding - normalized * (height - padding * 2);
-  }
-
-  function drawFrame(timestamp) {
-    if (start === null) {
-      start = timestamp;
-    }
-    const elapsed = (timestamp - start) % duration;
-    const progress = elapsed / duration;
-
-    ctx.clearRect(0, 0, width, height);
-
-    const gradient = ctx.createLinearGradient(0, 0, width, height);
-    gradient.addColorStop(0, 'rgba(6, 200, 255, 0.35)');
-    gradient.addColorStop(1, 'rgba(6, 200, 255, 0)');
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, width, height);
-
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(padding, padding);
-    ctx.lineTo(padding, height - padding);
-    ctx.lineTo(width - padding, height - padding);
-    ctx.stroke();
-
-    ctx.lineWidth = 2.4;
-    ctx.strokeStyle = 'rgba(6, 200, 255, 0.9)';
-    ctx.beginPath();
-
-    winnerTimeline.forEach((entry, index) => {
-      const x = padding + index * stepX;
-      const y = mapY(entry.seconds);
-      if (index === 0) {
-        ctx.moveTo(x, y);
-      } else {
-        const visibleProgress = progress * Math.max(dayCount - 1, 1);
-        if (index - 1 <= visibleProgress) {
-          ctx.lineTo(x, y);
-        }
-      }
-    });
-
-    ctx.stroke();
-
-    const cursorProgress = progress * Math.max(dayCount - 1, 1);
-    const baseIndex = Math.floor(cursorProgress);
-    const fractional = cursorProgress - baseIndex;
-
-    const current = winnerTimeline[Math.min(baseIndex, dayCount - 1)];
-    const next = winnerTimeline[Math.min(baseIndex + 1, dayCount - 1)];
-
-    const currentX = padding + baseIndex * stepX;
-    const currentY = mapY(current.seconds);
-
-    let x = currentX;
-    let y = currentY;
-
-    if (next && baseIndex < dayCount - 1) {
-      const nextX = padding + (baseIndex + 1) * stepX;
-      const nextY = mapY(next.seconds);
-      x = currentX + (nextX - currentX) * fractional;
-      y = currentY + (nextY - currentY) * fractional;
-    }
-
-    const glow = ctx.createRadialGradient(x, y, 0, x, y, 28);
-    glow.addColorStop(0, 'rgba(6, 200, 255, 0.55)');
-    glow.addColorStop(1, 'rgba(6, 200, 255, 0)');
-    ctx.fillStyle = glow;
-    ctx.beginPath();
-    ctx.arc(x, y, 28, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = '#06c8ff';
-    ctx.beginPath();
-    ctx.arc(x, y, 6, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
-    ctx.font = `${labelFontSize}px Inter, sans-serif`;
-    ctx.fillText(`Day ${current.day} – ${current.name}`, padding, padding - 8);
-
-    canvasAnimationId = requestAnimationFrame(drawFrame);
-  }
-
-  canvasResizeHandler = () => {
-    if (canvasAnimationId) {
-      cancelAnimationFrame(canvasAnimationId);
-    }
-    configureDimensions();
-    start = null;
-    canvasAnimationId = requestAnimationFrame(drawFrame);
-  };
-
-  configureDimensions();
-  canvasAnimationId = requestAnimationFrame(drawFrame);
-  window.addEventListener('resize', canvasResizeHandler, { passive: true });
-  if (window.visualViewport) {
-    window.visualViewport.addEventListener('resize', canvasResizeHandler, { passive: true });
-    window.visualViewport.addEventListener('scroll', canvasResizeHandler, { passive: true });
-  }
-}
-
 function parseTimeToSeconds(timeString) {
   if (typeof timeString !== 'string') return Number.POSITIVE_INFINITY;
   const [minutes, seconds] = timeString.split(':').map(Number);
@@ -704,21 +700,29 @@ function buildInstagramLink(name) {
   return `https://instagram.com/${sanitized}`;
 }
 
-playerSearchInput.addEventListener('change', () => updatePlayerResults());
+playerSearchInput.addEventListener('focus', () => {
+  // Frühzeitiges Warm-Up, damit die Daten bei der ersten Suche schon vorliegen.
+  ensurePlayerData();
+});
+
+playerSearchInput.addEventListener('change', () => {
+  updatePlayerResults().catch((error) => console.error(error));
+});
+
 playerSearchInput.addEventListener('input', () => {
   if (!playerSearchInput.value) {
-    updatePlayerResults();
+    updatePlayerResults().catch((error) => console.error(error));
     return;
   }
 
   const normalized = playerSearchInput.value.trim().toLowerCase();
   if (playerIndex.has(normalized)) {
-    updatePlayerResults();
+    updatePlayerResults().catch((error) => console.error(error));
   } else {
-    updatePlayerResults({ silentOnNoMatch: true });
+    updatePlayerResults({ silentOnNoMatch: true }).catch((error) => console.error(error));
   }
 });
 sortFieldSelect.addEventListener('change', () => currentPlayer && renderPlayerResults(currentPlayer));
 sortOrderSelect.addEventListener('change', () => currentPlayer && renderPlayerResults(currentPlayer));
 
-loadStats();
+loadWinnerSummaries();

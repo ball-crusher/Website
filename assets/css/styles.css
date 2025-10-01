@@ -121,31 +121,24 @@ a:focus {
 
 .hero__visual {
   margin: 0;
-  padding: calc(1.2rem * var(--spacing-scale));
+  padding: calc(1.6rem * var(--spacing-scale));
   border-radius: var(--radius-lg);
   border: 1px solid rgba(56, 189, 248, 0.25);
-  background: var(--surface);
+  background: linear-gradient(135deg, rgba(148, 163, 184, 0.18), rgba(14, 165, 233, 0.16));
   box-shadow: var(--shadow-soft);
-  display: grid;
-  gap: calc(0.85rem * var(--spacing-scale));
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.hero__visual canvas {
-  width: 100%;
-  height: auto;
-  aspect-ratio: 10 / 7;
-  display: block;
-  border-radius: var(--radius-md);
-  background: rgba(148, 163, 184, 0.08);
-  max-height: calc(var(--viewport-height, 100vh) * 0.34);
-}
-
-.hero__hint {
+.hero__visual-text {
   margin: 0;
-  font-size: calc(0.78rem * var(--font-scale));
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--text-muted);
+  font-size: clamp(calc(1.25rem * var(--font-scale)), calc(4vw * var(--font-scale)),
+      calc(1.8rem * var(--font-scale)));
+  line-height: 1.4;
+  font-weight: 600;
+  text-align: center;
+  color: rgba(248, 250, 252, 0.85);
 }
 
 .quick-nav {
@@ -234,6 +227,10 @@ a:focus {
   box-shadow: 0 calc(18px * var(--elevation-scale)) calc(35px * var(--elevation-scale))
     rgba(8, 15, 40, 0.42);
   backdrop-filter: blur(calc(18px * var(--elevation-scale)));
+}
+
+.panel--separated {
+  margin-top: calc(2.4rem * var(--spacing-scale));
 }
 
 .panel__header {
@@ -540,6 +537,49 @@ a:focus {
   margin: 0;
   color: var(--text-muted);
   font-style: italic;
+}
+
+.loading-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(0.65rem * var(--spacing-scale));
+  padding: calc(0.9rem * var(--spacing-scale));
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  background: rgba(8, 15, 35, 0.72);
+  color: var(--text-secondary);
+  font-size: calc(0.95rem * var(--font-scale));
+}
+
+.loading-indicator--inline {
+  justify-self: flex-start;
+}
+
+.loading-indicator[hidden] {
+  display: none;
+}
+
+.loading-indicator__spinner {
+  width: calc(1.25rem * var(--spacing-scale));
+  height: calc(1.25rem * var(--spacing-scale));
+  border-radius: 50%;
+  border: 2px solid rgba(148, 163, 184, 0.25);
+  border-top-color: rgba(14, 165, 233, 0.8);
+  animation: spin 1s linear infinite;
+}
+
+.loading-indicator__label {
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .page__footer {
