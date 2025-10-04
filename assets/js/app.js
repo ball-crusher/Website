@@ -9,7 +9,20 @@
  *   4. Keeping every function small, documented, and easy to tweak.
  */
 
-const DATA_URL = 'data/day_stats.json';
+// We previously served every day in a single JSON file, but that forced us to
+// ship a very large payload even when only a handful of records changed. The
+// dashboard now looks for a series of chunked files that follow the pattern
+// `data_stats1.json`, `data_stats2.json`, … inside the `data/` directory. Each
+// chunk contains a `day_stats` array, and we stitch every chunk together at
+// runtime so the rest of the rendering logic can stay exactly the same.
+const DATA_FILE_PREFIX = 'data/data_stats';
+const DATA_FILE_SUFFIX = '.json';
+// Guard rail so a misconfigured server cannot trap us in an endless loop if it
+// keeps returning successful responses for every index.
+const MAX_DATA_FILES = 50;
+// Backwards compatibility: if no chunked files exist we still attempt to read
+// the legacy single-file endpoint so older datasets continue to work.
+const LEGACY_DATA_URL = 'data/day_stats.json';
 
 // --- DOM lookups ---------------------------------------------------------------------------
 
@@ -103,17 +116,16 @@ showPlayerIdleMessage();
 async function loadStats() {
   setOpenStatsLoading(true);
   try {
-    const response = await fetch(DATA_URL, { cache: 'no-cache' });
-    if (!response.ok) {
-      throw new Error(`Failed to load stats (${response.status})`);
+    // Pull every chunked file we can find and flatten the resulting lists. The
+    // helper takes care of falling back to the legacy single JSON file when no
+    // chunked files are present.
+    const combinedStats = await loadAllStatsChunks();
+
+    if (!combinedStats.length) {
+      throw new Error('No day stats available');
     }
 
-    const payload = await response.json();
-    if (!payload || !Array.isArray(payload.day_stats)) {
-      throw new Error('Unexpected data format');
-    }
-
-    initialiseDays(payload.day_stats);
+    initialiseDays(combinedStats);
   } catch (error) {
     console.error(error);
     openStatsGrid.innerHTML = `<p class="no-results">${error.message}. Check the JSON endpoint.</p>`;
@@ -121,6 +133,70 @@ async function loadStats() {
   } finally {
     setOpenStatsLoading(false);
   }
+}
+
+/**
+ * Load every stats chunk following the `data_statsN.json` naming convention.
+ *
+ * The user now has the freedom to split the dataset into arbitrarily sized
+ * files (for example, six days in `data_stats1.json` and seven in
+ * `data_stats2.json`). We iterate over indexes starting at 1 and stop as soon
+ * as we hit a 404, which indicates the sequence ended. The helper also falls
+ * back to the historical `day_stats.json` file when no chunked files exist so
+ * legacy deployments keep functioning without manual migration.
+ */
+async function loadAllStatsChunks() {
+  const aggregated = [];
+  let filesFound = 0;
+
+  for (let index = 1; index <= MAX_DATA_FILES; index += 1) {
+    const url = `${DATA_FILE_PREFIX}${index}${DATA_FILE_SUFFIX}`;
+
+    let response;
+    try {
+      response = await fetch(url, { cache: 'no-cache' });
+    } catch (networkError) {
+      // Surface network issues immediately because retrying would likely fail
+      // again and waste the viewer's time.
+      throw new Error(`Network error while loading ${url}`);
+    }
+
+    if (response.status === 404) {
+      // Once we encounter the first gap in the sequence we can stop scanning.
+      break;
+    }
+
+    if (!response.ok) {
+      throw new Error(`Failed to load ${url} (${response.status})`);
+    }
+
+    const payload = await response.json();
+    if (!payload || !Array.isArray(payload.day_stats)) {
+      throw new Error(`Unexpected data format in ${url}`);
+    }
+
+    aggregated.push(...payload.day_stats);
+    filesFound += 1;
+  }
+
+  // If the loop never found a chunked file we revert to the legacy single
+  // endpoint. This keeps older datasets functional and gives the editor time to
+  // migrate gradually.
+  if (filesFound === 0) {
+    const legacyResponse = await fetch(LEGACY_DATA_URL, { cache: 'no-cache' });
+    if (!legacyResponse.ok) {
+      throw new Error(`Failed to load stats (${legacyResponse.status})`);
+    }
+
+    const legacyPayload = await legacyResponse.json();
+    if (!legacyPayload || !Array.isArray(legacyPayload.day_stats)) {
+      throw new Error('Unexpected data format');
+    }
+
+    aggregated.push(...legacyPayload.day_stats);
+  }
+
+  return aggregated;
 }
 
 /**
