@@ -9,7 +9,15 @@
  *   4. Keeping every function small, documented, and easy to tweak.
  */
 
-const DATA_URL = 'data/day_stats.json';
+// Prefix and suffix for the chunked JSON files. Each file follows the
+// pattern "data/data_stats{index}.json" (starting at 1) and contains a
+// portion of the original dataset. We reconstruct the full payload by
+// requesting them sequentially.
+const DATA_FILE_PREFIX = 'data/data_stats';
+const DATA_FILE_EXTENSION = '.json';
+// Hard guard to prevent an accidental infinite loop if new files are ever
+// generated incorrectly. Adjust upwards if the archive grows beyond this.
+const MAX_DATA_FILES = 50;
 
 // --- DOM lookups ---------------------------------------------------------------------------
 
@@ -103,17 +111,11 @@ showPlayerIdleMessage();
 async function loadStats() {
   setOpenStatsLoading(true);
   try {
-    const response = await fetch(DATA_URL, { cache: 'no-cache' });
-    if (!response.ok) {
-      throw new Error(`Failed to load stats (${response.status})`);
-    }
-
-    const payload = await response.json();
-    if (!payload || !Array.isArray(payload.day_stats)) {
-      throw new Error('Unexpected data format');
-    }
-
-    initialiseDays(payload.day_stats);
+    // Fetch and merge the data spread over multiple JSON files. This keeps
+    // the individual files light-weight while preserving the expected API
+    // shape for the rest of the application.
+    const dayStats = await loadAllDataChunks();
+    initialiseDays(dayStats);
   } catch (error) {
     console.error(error);
     openStatsGrid.innerHTML = `<p class="no-results">${error.message}. Check the JSON endpoint.</p>`;
@@ -121,6 +123,58 @@ async function loadStats() {
   } finally {
     setOpenStatsLoading(false);
   }
+}
+
+/**
+ * Retrieve every data_stats*.json chunk and flatten their day arrays.
+ * The iteration stops as soon as a gap is detected (404) which allows the
+ * dataset to grow organically without code changes. Extensive comments are
+ * kept to explain the slightly unusual flow for future maintainers.
+ */
+async function loadAllDataChunks() {
+  const mergedDays = [];
+
+  for (let index = 1; index <= MAX_DATA_FILES; index += 1) {
+    const url = `${DATA_FILE_PREFIX}${index}${DATA_FILE_EXTENSION}`;
+
+    let response;
+    try {
+      // We bypass the browser cache so manual file updates are reflected
+      // immediately without a hard refresh. This mirrors the behaviour of
+      // the legacy single-file setup.
+      response = await fetch(url, { cache: 'no-cache' });
+    } catch (networkError) {
+      throw new Error(`Failed to request ${url}: ${networkError.message}`);
+    }
+
+    if (response.status === 404) {
+      // Once we already have data, a 404 simply means the archive ended. We
+      // exit gracefully; otherwise, we inform the user that nothing exists.
+      if (mergedDays.length === 0) {
+        throw new Error('No stats files found. Check the data directory.');
+      }
+      break;
+    }
+
+    if (!response.ok) {
+      throw new Error(`Failed to load stats (${response.status}) from ${url}`);
+    }
+
+    const payload = await response.json();
+    if (!payload || !Array.isArray(payload.day_stats)) {
+      throw new Error(`Unexpected data format in ${url}`);
+    }
+
+    // Concatenate the chunk contents. Using push with spread keeps the
+    // operation explicit and avoids hidden array copies.
+    mergedDays.push(...payload.day_stats);
+  }
+
+  if (!mergedDays.length) {
+    throw new Error('No day stats available after reading all chunks.');
+  }
+
+  return mergedDays;
 }
 
 /**
