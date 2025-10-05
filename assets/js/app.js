@@ -31,6 +31,7 @@ const openStatsLoading = document.getElementById('open-stats-loading');
 const playerSearchInput = document.getElementById('player-search');
 const playerResultsContainer = document.getElementById('player-results');
 const playerSuggestions = document.getElementById('player-suggestions');
+const playerLoading = document.getElementById('player-loading');
 const sortFieldSelect = document.getElementById('sort-field');
 const sortOrderSelect = document.getElementById('sort-order');
 const quickNavButtons = Array.from(document.querySelectorAll('.quick-nav__button'));
@@ -47,6 +48,8 @@ const state = {
   playerIndex: new Map(),
   /** Flag that prevents building the heavy index multiple times. */
   playerIndexReady: false,
+  /** Remember whether the user attempted to open the player view before data arrived. */
+  playerIndexRequestedBeforeReady: false,
   /** Stores the player currently shown in the Player Stats cards. */
   currentPlayer: null,
 };
@@ -100,6 +103,23 @@ function setOpenStatsLoading(isLoading) {
 }
 
 /**
+ * Toggle the player specific loading indicator so the viewer knows work is in progress.
+ */
+function setPlayerLoading(isLoading) {
+  if (!playerLoading) return;
+  playerLoading.hidden = !isLoading;
+}
+
+/**
+ * Keep all player controls in sync with the current loading status.
+ */
+function setPlayerControlsDisabled(isDisabled) {
+  if (playerSearchInput) playerSearchInput.disabled = isDisabled;
+  if (sortFieldSelect) sortFieldSelect.disabled = isDisabled;
+  if (sortOrderSelect) sortOrderSelect.disabled = isDisabled;
+}
+
+/**
  * Ensure the player results container contains a friendly default message whenever
  * no selection is active.
  */
@@ -110,6 +130,8 @@ function showPlayerIdleMessage() {
 
 // Prime the idle message before any data arrives.
 showPlayerIdleMessage();
+// Disable the search controls until we know whether the underlying data exists.
+setPlayerControlsDisabled(true);
 
 // --- Data loading --------------------------------------------------------------------------
 
@@ -130,6 +152,8 @@ async function loadStats() {
     console.error(error);
     openStatsGrid.innerHTML = `<p class="no-results">${error.message}. Check the JSON endpoint.</p>`;
     playerResultsContainer.innerHTML = `<p class="no-results">${error.message}. Player search unavailable.</p>`;
+    setPlayerLoading(false);
+    setPlayerControlsDisabled(true);
   } finally {
     setOpenStatsLoading(false);
   }
@@ -229,6 +253,16 @@ function initialiseDays(dayStats) {
 
   openStatsGrid.innerHTML = '';
   openStatsGrid.append(fragment);
+
+  if (state.playerIndexRequestedBeforeReady) {
+    // The viewer attempted to open the tab before data was present. Honour that intent now.
+    ensurePlayerIndex();
+  } else {
+    // Data is available, so the controls can be re-enabled even if the player index
+    // has not been requested yet.
+    setPlayerLoading(false);
+    setPlayerControlsDisabled(false);
+  }
 }
 
 /**
@@ -418,8 +452,21 @@ function renderDayDetails(record, container) {
  */
 function ensurePlayerIndex() {
   if (state.playerIndexReady) {
+    setPlayerLoading(false);
+    setPlayerControlsDisabled(false);
     return;
   }
+
+  if (!state.days.length) {
+    // Data is still loading, so surface the spinner and remember to retry when ready.
+    state.playerIndexRequestedBeforeReady = true;
+    setPlayerLoading(true);
+    setPlayerControlsDisabled(true);
+    return;
+  }
+
+  setPlayerLoading(true);
+  setPlayerControlsDisabled(true);
 
   const index = new Map();
   state.days.forEach((day) => {
@@ -444,7 +491,10 @@ function ensurePlayerIndex() {
 
   state.playerIndex = index;
   state.playerIndexReady = true;
+  state.playerIndexRequestedBeforeReady = false;
   populatePlayerSuggestions();
+  setPlayerLoading(false);
+  setPlayerControlsDisabled(false);
 }
 
 /**
@@ -478,6 +528,11 @@ function updatePlayerResults({ silentOnNoMatch = false } = {}) {
   }
 
   ensurePlayerIndex();
+
+  if (!state.playerIndexReady) {
+    // Without a ready index we cannot surface results yet.
+    return;
+  }
 
   const normalized = query.toLowerCase();
   let entry = state.playerIndex.get(normalized);
@@ -625,6 +680,9 @@ playerSearchInput.addEventListener('input', () => {
 
   const normalized = playerSearchInput.value.trim().toLowerCase();
   ensurePlayerIndex();
+  if (!state.playerIndexReady) {
+    return;
+  }
   if (state.playerIndex.has(normalized)) {
     updatePlayerResults();
   } else {
