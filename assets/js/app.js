@@ -49,6 +49,10 @@ const state = {
   playerIndexReady: false,
   /** Stores the player currently shown in the Player Stats cards. */
   currentPlayer: null,
+  /** Tracks whether at least one stats payload has been loaded successfully. */
+  dataReady: false,
+  /** Remembers whether the viewer has attempted to open the Player Stats tools. */
+  playerIndexRequested: false,
 };
 
 // Copy we reuse in multiple warnings / loaders.
@@ -104,12 +108,32 @@ function setOpenStatsLoading(isLoading) {
  * no selection is active.
  */
 function showPlayerIdleMessage() {
+  // If the dataset is still on its way we keep the loading feedback visible so
+  // the viewer understands why no results appear yet.
+  if (!state.dataReady) {
+    showPlayerLoadingMessage();
+    return;
+  }
+
   playerResultsContainer.innerHTML =
     '<p class="no-results">Search for a player to see results.</p>';
 }
 
 // Prime the idle message before any data arrives.
 showPlayerIdleMessage();
+
+/**
+ * Render a compact loader that mirrors the open stats banner but tailored for
+ * the Player Stats panel. This ensures that when users jump straight to the
+ * tab before the JSON fetch finishes they still get immediate feedback.
+ */
+function showPlayerLoadingMessage() {
+  playerResultsContainer.innerHTML =
+    '<div class="loading-block" role="status" aria-live="polite">' +
+    '<span class="spinner" aria-hidden="true"></span>' +
+    '<span class="loading-block__label">Loading player data…</span>' +
+    '</div>';
+}
 
 // --- Data loading --------------------------------------------------------------------------
 
@@ -126,6 +150,17 @@ async function loadStats() {
     }
 
     initialiseDays(combinedStats);
+    state.dataReady = true;
+
+    // Whenever the viewer opened the Player Stats tools early we owe them a
+    // rebuild now that the dataset exists.
+    if (state.playerIndexRequested) {
+      ensurePlayerIndex();
+    } else {
+      // If nobody has looked at Player Stats yet we still refresh the idle
+      // message so it swaps the spinner for the friendly instructions.
+      showPlayerIdleMessage();
+    }
   } catch (error) {
     console.error(error);
     openStatsGrid.innerHTML = `<p class="no-results">${error.message}. Check the JSON endpoint.</p>`;
@@ -417,9 +452,25 @@ function renderDayDetails(record, container) {
  * Build the player index once. We prepare suggestion options and allow searching by name.
  */
 function ensurePlayerIndex() {
+  // Remember that the player tools were accessed so we can retry once data is
+  // available. We do this before any early returns so the flag is reliable.
+  state.playerIndexRequested = true;
+
+  // When the data request is still pending we simply keep the loader visible
+  // and bail out. This allows the navigation button to work immediately while
+  // avoiding a permanently empty index.
+  if (!state.dataReady) {
+    showPlayerLoadingMessage();
+    return;
+  }
+
   if (state.playerIndexReady) {
     return;
   }
+
+  // Let the viewer know we are preparing the heavy structures – this executes
+  // synchronously but the visual feedback helps reassure on slower devices.
+  showPlayerLoadingMessage();
 
   const index = new Map();
   state.days.forEach((day) => {
@@ -444,6 +495,7 @@ function ensurePlayerIndex() {
 
   state.playerIndex = index;
   state.playerIndexReady = true;
+  showPlayerIdleMessage();
   populatePlayerSuggestions();
 }
 
