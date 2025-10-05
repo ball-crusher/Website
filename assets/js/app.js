@@ -43,10 +43,14 @@ const state = {
   days: [],
   /** Quick lookup by day number so we can hydrate cards lazily. */
   dayLookup: new Map(),
+  /** Tracks whether the chunked JSON files are still being fetched. */
+  isLoading: false,
   /** Cache for the per-player aggregates used in the Player Stats view. */
   playerIndex: new Map(),
   /** Flag that prevents building the heavy index multiple times. */
   playerIndexReady: false,
+  /** Remembers that a viewer has already requested Player Stats while data was loading. */
+  playerIndexRequested: false,
   /** Stores the player currently shown in the Player Stats cards. */
   currentPlayer: null,
 };
@@ -111,9 +115,23 @@ function showPlayerIdleMessage() {
 // Prime the idle message before any data arrives.
 showPlayerIdleMessage();
 
+/**
+ * Paints a lightweight loader inside the Player Stats panel while the JSON payload is on its way.
+ * Keeping this tiny ensures the button feels responsive without delaying the real index build.
+ */
+function showPlayerLoadingMessage() {
+  playerResultsContainer.innerHTML =
+    '<div class="inline-loader" role="status" aria-live="polite">' +
+    '<span class="spinner" aria-hidden="true"></span>' +
+    '<span>Loading player data…</span>' +
+    '</div>';
+}
+
 // --- Data loading --------------------------------------------------------------------------
 
 async function loadStats() {
+  // Notify every dependent component that data is on the way.
+  state.isLoading = true;
   setOpenStatsLoading(true);
   try {
     // Pull every chunked file we can find and flatten the resulting lists. The
@@ -131,7 +149,13 @@ async function loadStats() {
     openStatsGrid.innerHTML = `<p class="no-results">${error.message}. Check the JSON endpoint.</p>`;
     playerResultsContainer.innerHTML = `<p class="no-results">${error.message}. Player search unavailable.</p>`;
   } finally {
+    // Loading finished (successfully or not), so surface the final state.
+    state.isLoading = false;
     setOpenStatsLoading(false);
+    // When the user jumped into Player Stats early we owe them the index now that data exists.
+    if (state.playerIndexRequested && !state.playerIndexReady && state.days.length) {
+      ensurePlayerIndex();
+    }
   }
 }
 
@@ -417,7 +441,22 @@ function renderDayDetails(record, container) {
  * Build the player index once. We prepare suggestion options and allow searching by name.
  */
 function ensurePlayerIndex() {
+  // Mark that the Player Stats view has been requested at least once.
+  state.playerIndexRequested = true;
+
   if (state.playerIndexReady) {
+    return;
+  }
+
+  // When the master dataset is still loading we simply show feedback and wait for the retry.
+  if (state.isLoading) {
+    showPlayerLoadingMessage();
+    return;
+  }
+
+  // Without any day records we have nothing to index, so fall back to the idle hint.
+  if (!state.days.length) {
+    showPlayerIdleMessage();
     return;
   }
 
@@ -445,6 +484,13 @@ function ensurePlayerIndex() {
   state.playerIndex = index;
   state.playerIndexReady = true;
   populatePlayerSuggestions();
+
+  // Resolve any pending query immediately; otherwise restore the neutral helper copy.
+  if (playerSearchInput.value.trim()) {
+    updatePlayerResults();
+  } else {
+    showPlayerIdleMessage();
+  }
 }
 
 /**
