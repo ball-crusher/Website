@@ -45,6 +45,23 @@
           <button type="button" class="quick-nav__button" data-view-target="players" aria-pressed="false">
             Player stats
           </button>
+          <!--
+            Neuer Navigations-CTA der auf eine externe Seite führt.
+            Wir nutzen einen Link, behalten aber die Button-Klasse bei,
+            damit die Darstellung konsistent bleibt und wir keinen separaten
+            Stil pflegen müssen.
+          -->
+          <a
+            class="quick-nav__button quick-nav__button--extra"
+            href="https://example.com"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Extra Box (neu)"
+          >
+            Extra Box
+            <!-- Dezente Kennzeichnung, dass es sich um ein neues Feature handelt. -->
+            <span class="quick-nav__badge" aria-hidden="true">New</span>
+          </a>
         </div>
       </nav>
 

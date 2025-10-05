@@ -195,6 +195,60 @@ a:focus {
   touch-action: manipulation;
 }
 
+/*
+ * Zusätzliche Hervorhebung für den externen "Extra Box"-Button.
+ * Wir verwenden hier bewusst eine eigene Modifier-Klasse, um die Basis-Stile
+ * der Quick-Navigation nicht zu beeinflussen und zukünftige Buttons leicht
+ * ergänzen zu können.
+ */
+.quick-nav__button--extra {
+  /* Sattere Farben erzeugen mehr Aufmerksamkeit für das neue Angebot. */
+  border-color: rgba(56, 189, 248, 0.55);
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.45), rgba(14, 165, 233, 0.16));
+  color: var(--text-primary);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Animierter "New"-Badge, der das Feature als frisch markiert. */
+.quick-nav__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.1rem 0.45rem;
+  margin-left: 0.35rem;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #0f172a;
+  font-size: 0.65em;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  /* Das Badge erhält einen kleinen Schatten, damit es sich klar vom Button abhebt. */
+  box-shadow: 0 0.35rem 1rem rgba(14, 165, 233, 0.45);
+  animation: quick-nav-bounce 1.6s infinite ease-in-out;
+}
+
+/* Wackelnde Bewegung, die auf das neue Feature aufmerksam macht. */
+@keyframes quick-nav-bounce {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  20% {
+    transform: translateY(-10%) rotate(-3deg);
+  }
+  40% {
+    transform: translateY(0) rotate(2deg);
+  }
+  60% {
+    transform: translateY(-6%) rotate(-2deg);
+  }
+  80% {
+    transform: translateY(0) rotate(1deg);
+  }
+}
+
 .quick-nav__button:hover,
 .quick-nav__button:focus-visible {
   border-color: rgba(56, 189, 248, 0.5);
