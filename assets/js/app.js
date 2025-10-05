@@ -89,8 +89,15 @@ showView('open');
 quickNavButtons.forEach((button) => {
   button.addEventListener('click', () => {
     const target = button.dataset.viewTarget;
+    const externalUrl = button.dataset.url;
+
     if (target) {
+      // Standard quick-nav behaviour: swap the active panel inside the page.
       showView(target);
+    } else if (externalUrl) {
+      // Extra Box shortcut: open the configured URL in a new tab/window without
+      // blocking the main thread. `noopener` keeps the original page secure.
+      window.open(externalUrl, '_blank', 'noopener');
     }
   });
 });

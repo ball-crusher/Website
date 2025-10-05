@@ -603,6 +603,54 @@ a:focus {
   color: var(--accent-strong);
 }
 
+/*
+ * Extra Box shortcut styling -------------------------------------------------
+ * The new button needs a wiggle animation and a badge to highlight that it is
+ * fresh. Every declaration is documented so future adjustments stay simple.
+ */
+.quick-nav__button--new {
+  position: relative; /* Required so the badge can be absolutely positioned. */
+  overflow: hidden; /* Keeps the badge glow from overflowing the pill shape. */
+  animation: quick-nav-wiggle 1800ms ease-in-out infinite; /* Gentle attention grab. */
+}
+
+/* Dedicated badge that spells NEW in a small pill. */
+.quick-nav__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.15rem 0.5rem;
+  margin-left: 0.25rem;
+  border-radius: 999px;
+  font-size: 0.65em;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #0f172a;
+  background: linear-gradient(135deg, #facc15, #f97316);
+  box-shadow: 0 0.4rem 1rem rgba(250, 204, 21, 0.35);
+}
+
+/* Subtle wobble so the "NEW" button feels alive without being distracting. */
+@keyframes quick-nav-wiggle {
+  0%,
+  100% {
+    transform: rotate(0deg) scale(1);
+  }
+  15% {
+    transform: rotate(-2deg) scale(1.02);
+  }
+  30% {
+    transform: rotate(2deg) scale(1.02);
+  }
+  45% {
+    transform: rotate(-1.5deg) scale(1.01);
+  }
+  60% {
+    transform: rotate(1.5deg) scale(1.01);
+  }
+}
+
 .rank-badge {
   justify-self: start;
   background: rgba(13, 148, 136, 0.2);
