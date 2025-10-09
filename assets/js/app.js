@@ -15,8 +15,11 @@
 // `data_stats1.json`, `data_stats2.json`, … inside the `data/` directory. Each
 // chunk contains a `day_stats` array, and we stitch every chunk together at
 // runtime so the rest of the rendering logic can stay exactly the same.
-const DATA_FILE_PREFIX = 'data/data_stats';
 const DATA_FILE_SUFFIX = '.json';
+// Some editors name the chunked payloads `data_statsN.json`, while others use
+// the slightly different `day_statsN.json` scheme. Supporting both avoids
+// forcing the content team to rename historical exports when a typo slips in.
+const DATA_FILE_PREFIXES = ['data/data_stats', 'data/day_stats'];
 // Guard rail so a misconfigured server cannot trap us in an endless loop if it
 // keeps returning successful responses for every index.
 const MAX_DATA_FILES = 50;
@@ -174,33 +177,61 @@ async function loadAllStatsChunks() {
   let filesFound = 0;
 
   for (let index = 1; index <= MAX_DATA_FILES; index += 1) {
-    const url = `${DATA_FILE_PREFIX}${index}${DATA_FILE_SUFFIX}`;
+    // Keep track of whether any of the prefix variations produced a valid file
+    // for the current index. We only stop scanning when every option returns a
+    // 404, which means the publisher has no more chunks for us to consume.
+    let chunkLoadedForIndex = false;
 
-    let response;
-    try {
-      response = await fetch(url, { cache: 'no-cache' });
-    } catch (networkError) {
-      // Surface network issues immediately because retrying would likely fail
-      // again and waste the viewer's time.
-      throw new Error(`Network error while loading ${url}`);
-    }
+    for (const prefix of DATA_FILE_PREFIXES) {
+      // Build the absolute URL using the candidate prefix. The prefixes already
+      // include the directory, so here we only attach the incrementing number
+      // and the common suffix.
+      const url = `${prefix}${index}${DATA_FILE_SUFFIX}`;
 
-    if (response.status === 404) {
-      // Once we encounter the first gap in the sequence we can stop scanning.
+      let response;
+      try {
+        response = await fetch(url, { cache: 'no-cache' });
+      } catch (networkError) {
+        // This is a hard failure (e.g. offline or CORS), so retrying a
+        // different prefix would not magically fix the issue. Bubble the error
+        // up to the caller so we can show a helpful message to the viewer.
+        throw new Error(`Network error while loading ${url}`);
+      }
+
+      if (response.status === 404) {
+        // A 404 simply means the current prefix does not exist for this index.
+        // We try the next prefix before deciding whether the sequence ended.
+        continue;
+      }
+
+      if (!response.ok) {
+        // Any other status code (500s, 403s, etc.) should be surfaced to the
+        // maintainer so they can investigate the backend configuration.
+        throw new Error(`Failed to load ${url} (${response.status})`);
+      }
+
+      const payload = await response.json();
+      if (!payload || !Array.isArray(payload.day_stats)) {
+        // When a file exists but its structure changed unexpectedly we also
+        // abort early, as rendering bogus data would be misleading.
+        throw new Error(`Unexpected data format in ${url}`);
+      }
+
+      aggregated.push(...payload.day_stats);
+      filesFound += 1;
+      chunkLoadedForIndex = true;
+
+      // Once one prefix yielded a proper payload we stop checking further
+      // prefixes for the same index to avoid duplicating data.
       break;
     }
 
-    if (!response.ok) {
-      throw new Error(`Failed to load ${url} (${response.status})`);
+    if (!chunkLoadedForIndex) {
+      // Every prefix produced a 404 for this index, which indicates the
+      // sequence of chunked files ended. Breaking keeps the loop tight even if
+      // the author accidentally leaves extra gaps at the end.
+      break;
     }
-
-    const payload = await response.json();
-    if (!payload || !Array.isArray(payload.day_stats)) {
-      throw new Error(`Unexpected data format in ${url}`);
-    }
-
-    aggregated.push(...payload.day_stats);
-    filesFound += 1;
   }
 
   // If the loop never found a chunked file we revert to the legacy single
