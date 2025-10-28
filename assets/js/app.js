@@ -38,6 +38,9 @@ const playerLoading = document.getElementById('player-loading');
 const sortFieldSelect = document.getElementById('sort-field');
 const sortOrderSelect = document.getElementById('sort-order');
 const quickNavButtons = Array.from(document.querySelectorAll('.quick-nav__button'));
+// Dedicated lookup for the support button so we can wire a custom click handler without
+// polluting the tab switching logic that the rest of the quick navigation relies on.
+const supportButton = document.querySelector('.quick-nav__button--support');
 const viewSections = Array.from(document.querySelectorAll('[data-view]'));
 
 // --- Shared state --------------------------------------------------------------------------
@@ -96,6 +99,19 @@ quickNavButtons.forEach((button) => {
     }
   });
 });
+
+// Provide a lightweight redirect for the support button; the explicit null check means
+// future layouts can safely remove the button without throwing runtime errors here.
+if (supportButton) {
+  supportButton.addEventListener('click', () => {
+    // Using window.open ensures the stats interface stays in view while the user browses
+    // to the external support page in a new tab.
+    const supportUrl = supportButton.dataset.supportLink;
+    if (supportUrl) {
+      window.open(supportUrl, '_blank', 'noopener');
+    }
+  });
+}
 
 /**
  * Convenience helper to show or hide the top level loading banner in the Open Stats view.
