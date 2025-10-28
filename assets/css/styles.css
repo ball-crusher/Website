@@ -119,6 +119,82 @@ a:focus {
   color: var(--text-secondary);
 }
 
+/*
+ * Support callout styles -----------------------------------------------------
+ * The Buy Me a Coffee widget drops its own markup, but wrapping it in a styled
+ * container lets us animate the entire block and keep visual consistency with
+ * the rest of the hero section.
+ */
+.support-callout {
+  position: relative;
+  margin: calc(1.6rem * var(--spacing-scale)) 0 0;
+  padding: calc(1.25rem * var(--spacing-scale));
+  border-radius: var(--radius-lg);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  background: linear-gradient(135deg, rgba(51, 148, 147, 0.16), rgba(14, 165, 233, 0.08));
+  box-shadow: 0 calc(22px * var(--elevation-scale)) calc(42px * var(--elevation-scale)) rgba(2, 6, 23, 0.45);
+  overflow: hidden;
+  transform: translateY(32px);
+  opacity: 0;
+  transition: transform 420ms cubic-bezier(0.16, 1, 0.3, 1), opacity 420ms ease;
+}
+
+/* Decorative glow that fades in when the callout becomes visible. */
+.support-callout::before {
+  content: '';
+  position: absolute;
+  inset: -35% -45% auto;
+  height: 120%;
+  background: radial-gradient(circle at top, rgba(255, 221, 0, 0.55), transparent 60%);
+  opacity: 0;
+  transition: opacity 600ms ease;
+  pointer-events: none;
+}
+
+/* Long copy stays friendly and legible. */
+.support-callout__message {
+  margin: 0 0 calc(0.9rem * var(--spacing-scale));
+  font-size: calc(0.95rem * var(--font-scale));
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+/* Wrapper keeps the external button centered without touching its internals. */
+.support-callout__button {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+}
+
+/*
+ * When the IntersectionObserver in app.js flags the component as visible we
+ * pop the callout upwards and fade in the decorative glow.
+ */
+.support-callout--visible {
+  transform: translateY(0);
+  opacity: 1;
+}
+
+.support-callout--visible::before {
+  opacity: 1;
+}
+
+/* A playful pulse applied to the widget after it appears, encouraging clicks
+   without being distracting. */
+@keyframes support-callout-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.04);
+  }
+}
+
+.support-callout--visible [data-animate='pulse'] {
+  animation: support-callout-pulse 3s ease-in-out 0.6s infinite;
+}
+
 .hero__visual {
   margin: 0;
   padding: calc(1.2rem * var(--spacing-scale));

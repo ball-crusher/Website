@@ -39,6 +39,7 @@ const sortFieldSelect = document.getElementById('sort-field');
 const sortOrderSelect = document.getElementById('sort-order');
 const quickNavButtons = Array.from(document.querySelectorAll('.quick-nav__button'));
 const viewSections = Array.from(document.querySelectorAll('[data-view]'));
+const supportCallout = document.getElementById('support-cta');
 
 // --- Shared state --------------------------------------------------------------------------
 
@@ -135,6 +136,30 @@ function showPlayerIdleMessage() {
 showPlayerIdleMessage();
 // Disable the search controls until we know whether the underlying data exists.
 setPlayerControlsDisabled(true);
+
+// --- Support widget animation --------------------------------------------------------------
+
+if (supportCallout) {
+  // IntersectionObserver keeps the animation inexpensive: the widget only starts
+  // animating when the user actually scrolls it into view. This avoids running
+  // continuous CSS animations off-screen, which would waste GPU cycles.
+  const revealSupportCallout = (entries, observer) => {
+    entries.forEach((entry) => {
+      if (entry.isIntersecting) {
+        // Toggle the helper class consumed by styles.css so the block slides
+        // into view and triggers the gentle pulse on the embedded button.
+        supportCallout.classList.add('support-callout--visible');
+        observer.disconnect();
+      }
+    });
+  };
+
+  const observer = new IntersectionObserver(revealSupportCallout, {
+    threshold: 0.35,
+  });
+
+  observer.observe(supportCallout);
+}
 
 // --- Data loading --------------------------------------------------------------------------
 

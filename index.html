@@ -26,6 +26,31 @@
             <p class="hero__description">
               Here you can check your daily stats. This is just a pre-release version, so please be patient if you encounter any bugs — we’re working on fixing them soon!
             </p>
+            <!-- Support widget container: keeps the Buy Me a Coffee button near the hero copy
+                 so followers can back the project right after understanding what the page offers. -->
+            <aside class="support-callout" id="support-cta" aria-label="Support the creator">
+              <!-- A short pitch reinforces why the button exists without feeling spammy. -->
+              <p class="support-callout__message">
+                Enjoying the daily breakdowns? Fuel the next batch of videos and live breakdowns with a quick coffee!
+              </p>
+              <!-- Script from Buy Me a Coffee. We embed it directly inside the callout so the
+                   generated button inherits our layout styles. The external script paints
+                   the interactive button in place. -->
+              <div class="support-callout__button" data-animate="pulse">
+                <script
+                  type="text/javascript"
+                  src="https://cdnjs.buymeacoffee.com/1.0.0/button.prod.min.js"
+                  data-name="bmc-button"
+                  data-slug="follow_to_enter_the_game"
+                  data-color="#339493"
+                  data-font="Cookie"
+                  data-text="Support my videos"
+                  data-outline-color="#ffffff"
+                  data-font-color="#ffffff"
+                  data-coffee-color="#FFDD00"
+                ></script>
+              </div>
+            </aside>
           </div>
           <!-- The animated canvas used to live here; we now keep the hero ultra-lightweight
                so that first paint on low-end phones happens instantly. -->
