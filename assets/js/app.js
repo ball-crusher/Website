@@ -9,23 +9,39 @@
  *   4. Keeping every function small, documented, and easy to tweak.
  */
 
-// We previously served every day in a single JSON file, but that forced us to
-// ship a very large payload even when only a handful of records changed. The
-// dashboard now looks for a series of chunked files that follow the pattern
-// `data_stats1.json`, `data_stats2.json`, … inside the `data/` directory. Each
-// chunk contains a `day_stats` array, and we stitch every chunk together at
-// runtime so the rest of the rendering logic can stay exactly the same.
-const DATA_FILE_SUFFIX = '.json';
-// Some editors name the chunked payloads `data_statsN.json`, while others use
-// the slightly different `day_statsN.json` scheme. Supporting both avoids
-// forcing the content team to rename historical exports when a typo slips in.
-const DATA_FILE_PREFIXES = ['data/data_stats', 'data/day_stats'];
-// Guard rail so a misconfigured server cannot trap us in an endless loop if it
-// keeps returning successful responses for every index.
-const MAX_DATA_FILES = 50;
-// Backwards compatibility: if no chunked files exist we still attempt to read
-// the legacy single-file endpoint so older datasets continue to work.
-const LEGACY_DATA_URL = 'data/day_stats.json';
+// The dataset now lives inside Firebase Realtime Database. Instead of pulling
+// gigantic JSON bundles up-front, we ask Firebase for tiny slices:
+//   1. A shallow list of day IDs so we know which leaderboards exist.
+//   2. The winner preview for each day so the home screen stays informative.
+//   3. The heavy player list only when the viewer expands a specific day or
+//      when the Player Stats tab needs to build its search index.
+// This gives us near-constant memory usage regardless of how many days the
+// creator uploads.
+const FIREBASE_CONFIG = {
+  apiKey: 'AIzaSyBzJZID0nKdpIIcjCuMbKnnq_pZ8nJS2WA',
+  authDomain: 'ball-crusher-c9db6.firebaseapp.com',
+  databaseURL: 'https://ball-crusher-c9db6-default-rtdb.firebaseio.com',
+  projectId: 'ball-crusher-c9db6',
+  storageBucket: 'ball-crusher-c9db6.firebasestorage.app',
+  messagingSenderId: '220053775845',
+  appId: '1:220053775845:web:712522c6d2732583c9bb0c',
+  measurementId: 'G-T2YMQ278NC',
+};
+
+// Realtime Database REST endpoints require a trailing `.json`. Centralise the
+// base URL so the helper utilities below stay tiny and we can inject query
+// parameters without repeating ourselves.
+const DATABASE_ROOT = `${FIREBASE_CONFIG.databaseURL.replace(/\/?$/, '')}`;
+const DAY_STATS_PATH = 'day_stats';
+
+// Winners live at index `0` in every day array. We can request only that entry
+// by sorting on the `$key` pseudo-field (which corresponds to the numeric
+// index) and limiting the result to the first record.
+const WINNER_QUERY = '?orderBy=%22%24key%22&limitToFirst=1';
+
+// Fetching dozens of days in parallel could overwhelm both Firebase and the
+// visitor's device, so we cap the number of concurrent network trips.
+const MAX_PARALLEL_REQUESTS = 6;
 
 // --- DOM lookups ---------------------------------------------------------------------------
 
@@ -46,7 +62,7 @@ const viewSections = Array.from(document.querySelectorAll('[data-view]'));
 // --- Shared state --------------------------------------------------------------------------
 
 const state = {
-  /** Sorted list of day objects exactly as received from the JSON file. */
+  /** Sorted list of day records enriched with Firebase metadata and caches. */
   days: [],
   /** Quick lookup by day number so we can hydrate cards lazily. */
   dayLookup: new Map(),
@@ -59,6 +75,11 @@ const state = {
   /** Stores the player currently shown in the Player Stats cards. */
   currentPlayer: null,
 };
+
+// Promise used to deduplicate expensive player index builds when multiple UI
+// actions trigger them at the same time (e.g. focusing the search box and
+// switching tabs simultaneously).
+let playerIndexPromise = null;
 
 // Copy we reuse in multiple warnings / loaders.
 const HEAVY_VIEW_WARNING =
@@ -157,16 +178,17 @@ setPlayerControlsDisabled(true);
 async function loadStats() {
   setOpenStatsLoading(true);
   try {
-    // Pull every chunked file we can find and flatten the resulting lists. The
-    // helper takes care of falling back to the legacy single JSON file when no
-    // chunked files are present.
-    const combinedStats = await loadAllStatsChunks();
+    // Fetch an ultra-lightweight list of day summaries. Each summary contains
+    // the Firebase key, the public day number, and a winner preview. The heavy
+    // player arrays stay on the server until the viewer explicitly opens a
+    // leaderboard or requests the player search tab.
+    const summaries = await loadDaySummaries();
 
-    if (!combinedStats.length) {
+    if (!summaries.length) {
       throw new Error('No day stats available');
     }
 
-    initialiseDays(combinedStats);
+    initialiseDays(summaries);
   } catch (error) {
     console.error(error);
     openStatsGrid.innerHTML = `<p class="no-results">${error.message}. Check the JSON endpoint.</p>`;
@@ -179,104 +201,69 @@ async function loadStats() {
 }
 
 /**
- * Load every stats chunk following the `data_statsN.json` naming convention.
- *
- * The user now has the freedom to split the dataset into arbitrarily sized
- * files (for example, six days in `data_stats1.json` and seven in
- * `data_stats2.json`). We iterate over indexes starting at 1 and stop as soon
- * as we hit a 404, which indicates the sequence ended. The helper also falls
- * back to the historical `day_stats.json` file when no chunked files exist so
- * legacy deployments keep functioning without manual migration.
+ * Ask Firebase for the list of day documents and collect their minimal
+ * metadata. Every returned object contains the Firebase key, the public day
+ * number, and a tiny winner preview.
  */
-async function loadAllStatsChunks() {
-  const aggregated = [];
-  let filesFound = 0;
+async function loadDaySummaries() {
+  // `shallow=true` tells Firebase to only send the child keys, not the full
+  // leaderboard payload. The response looks like `{ "0": true, "1": true }`.
+  const shallowUrl = `${DATABASE_ROOT}/${DAY_STATS_PATH}.json?shallow=true`;
+  const keyMap = await fetchJson(shallowUrl, {
+    context: 'day list',
+    allowMissing: true,
+  });
 
-  for (let index = 1; index <= MAX_DATA_FILES; index += 1) {
-    // Keep track of whether any of the prefix variations produced a valid file
-    // for the current index. We only stop scanning when every option returns a
-    // 404, which means the publisher has no more chunks for us to consume.
-    let chunkLoadedForIndex = false;
-
-    for (const prefix of DATA_FILE_PREFIXES) {
-      // Build the absolute URL using the candidate prefix. The prefixes already
-      // include the directory, so here we only attach the incrementing number
-      // and the common suffix.
-      const url = `${prefix}${index}${DATA_FILE_SUFFIX}`;
-
-      let response;
-      try {
-        response = await fetch(url, { cache: 'no-cache' });
-      } catch (networkError) {
-        // This is a hard failure (e.g. offline or CORS), so retrying a
-        // different prefix would not magically fix the issue. Bubble the error
-        // up to the caller so we can show a helpful message to the viewer.
-        throw new Error(`Network error while loading ${url}`);
-      }
-
-      if (response.status === 404) {
-        // A 404 simply means the current prefix does not exist for this index.
-        // We try the next prefix before deciding whether the sequence ended.
-        continue;
-      }
-
-      if (!response.ok) {
-        // Any other status code (500s, 403s, etc.) should be surfaced to the
-        // maintainer so they can investigate the backend configuration.
-        throw new Error(`Failed to load ${url} (${response.status})`);
-      }
-
-      const payload = await response.json();
-      if (!payload || !Array.isArray(payload.day_stats)) {
-        // When a file exists but its structure changed unexpectedly we also
-        // abort early, as rendering bogus data would be misleading.
-        throw new Error(`Unexpected data format in ${url}`);
-      }
-
-      aggregated.push(...payload.day_stats);
-      filesFound += 1;
-      chunkLoadedForIndex = true;
-
-      // Once one prefix yielded a proper payload we stop checking further
-      // prefixes for the same index to avoid duplicating data.
-      break;
-    }
-
-    if (!chunkLoadedForIndex) {
-      // Every prefix produced a 404 for this index, which indicates the
-      // sequence of chunked files ended. Breaking keeps the loop tight even if
-      // the author accidentally leaves extra gaps at the end.
-      break;
-    }
+  if (!keyMap) {
+    return [];
   }
 
-  // If the loop never found a chunked file we revert to the legacy single
-  // endpoint. This keeps older datasets functional and gives the editor time to
-  // migrate gradually.
-  if (filesFound === 0) {
-    const legacyResponse = await fetch(LEGACY_DATA_URL, { cache: 'no-cache' });
-    if (!legacyResponse.ok) {
-      throw new Error(`Failed to load stats (${legacyResponse.status})`);
-    }
-
-    const legacyPayload = await legacyResponse.json();
-    if (!legacyPayload || !Array.isArray(legacyPayload.day_stats)) {
-      throw new Error('Unexpected data format');
-    }
-
-    aggregated.push(...legacyPayload.day_stats);
+  const keys = Object.keys(keyMap);
+  if (!keys.length) {
+    return [];
   }
 
-  return aggregated;
+  const summaries = [];
+  await mapWithConcurrency(keys, MAX_PARALLEL_REQUESTS, async (firebaseKey) => {
+    const encodedKey = encodeURIComponent(firebaseKey);
+    const dayUrl = `${DATABASE_ROOT}/${DAY_STATS_PATH}/${encodedKey}/day.json`;
+
+    // Fetch the public day number and the winner preview in parallel so we only
+    // pay one network roundtrip per field.
+    const [dayNumber, winner] = await Promise.all([
+      fetchJson(dayUrl, { context: `day number for key ${firebaseKey}` }),
+      loadWinnerPreview(firebaseKey),
+    ]);
+
+    if (typeof dayNumber !== 'number') {
+      console.warn(`Skipping day with invalid number for key ${firebaseKey}`);
+      return;
+    }
+
+    summaries.push({ firebaseKey, dayNumber, winner });
+  });
+
+  return summaries;
 }
 
 /**
  * Store the sorted day list and render the lightweight preview cards.
  */
-function initialiseDays(dayStats) {
-  // Sort once so the UI remains consistent even if the API changes order.
-  state.days = [...dayStats].sort((a, b) => b.day - a.day);
+function initialiseDays(daySummaries) {
   state.dayLookup.clear();
+
+  state.days = daySummaries
+    .map((summary) => ({
+      firebaseKey: summary.firebaseKey,
+      dayNumber: summary.dayNumber,
+      winner: summary.winner ?? null,
+      players: null,
+      sortedPlayers: null,
+      loaded: false,
+      warningAcknowledged: false,
+      playersPromise: null,
+    }))
+    .sort((a, b) => b.dayNumber - a.dayNumber);
 
   if (!state.days.length) {
     openStatsGrid.innerHTML = '<p class="no-results">No days available yet.</p>';
@@ -284,18 +271,9 @@ function initialiseDays(dayStats) {
   }
 
   const fragment = document.createDocumentFragment();
-  state.days.forEach((day) => {
-    state.dayLookup.set(String(day.day), {
-      day,
-      // We only calculate the winner immediately; the rest is deferred.
-      winner: resolveWinner(day.players),
-      players: day.players,
-      sortedPlayers: null,
-      loaded: false,
-      warningAcknowledged: false,
-    });
-
-    fragment.append(createDayCard(day));
+  state.days.forEach((record) => {
+    state.dayLookup.set(String(record.dayNumber), record);
+    fragment.append(createDayCard(record));
   });
 
   openStatsGrid.innerHTML = '';
@@ -313,36 +291,21 @@ function initialiseDays(dayStats) {
 }
 
 /**
- * Identify the first-place finisher without allocating additional arrays.
- */
-function resolveWinner(players = []) {
-  let best = null;
-  players.forEach((player) => {
-    if (!best || Number(player.rank) < Number(best.rank)) {
-      best = player;
-    }
-  });
-  return best;
-}
-
-/**
  * Build the lightweight day preview card that only contains the winner.
  */
-function createDayCard(day) {
-  const record = state.dayLookup.get(String(day.day));
-  const winner = record?.winner;
-
+function createDayCard(record) {
+  const { dayNumber, winner } = record;
   const card = document.createElement('article');
   card.className = 'day-card';
   card.setAttribute('role', 'listitem');
-  card.dataset.day = String(day.day);
+  card.dataset.day = String(dayNumber);
 
   const header = document.createElement('div');
   header.className = 'day-card-content';
 
   const label = document.createElement('div');
   label.className = 'day-label';
-  label.textContent = `Day ${day.day}`;
+  label.textContent = `Day ${dayNumber}`;
 
   const winnerInfo = document.createElement('div');
   winnerInfo.className = 'winner';
@@ -379,7 +342,7 @@ function createDayCard(day) {
   collapse.className = 'collapse';
   collapse.hidden = true;
 
-  button.addEventListener('click', () => toggleDayDetails(day.day, button, collapse));
+  button.addEventListener('click', () => toggleDayDetails(record, button, collapse));
 
   header.append(label, winnerInfo, warning, button);
   card.append(header, collapse);
@@ -387,21 +350,54 @@ function createDayCard(day) {
 }
 
 /**
+ * Refresh the winner snippet on the day card whenever new data becomes available.
+ */
+function updateWinnerPreview(record) {
+  const card = document.querySelector(`.day-card[data-day="${record.dayNumber}"]`);
+  if (!card) {
+    return;
+  }
+
+  const winnerInfo = card.querySelector('.winner');
+  if (!winnerInfo) {
+    return;
+  }
+
+  const link = winnerInfo.querySelector('a');
+  if (link) {
+    link.textContent = record.winner?.name ?? '—';
+    link.href = buildInstagramLink(record.winner?.name);
+  }
+
+  let rectangles = winnerInfo.querySelector('.winner-rectangles');
+  if (!rectangles && record.winner) {
+    rectangles = document.createElement('span');
+    rectangles.className = 'winner-rectangles';
+    winnerInfo.append(rectangles);
+  }
+
+  if (rectangles) {
+    rectangles.textContent = `Rectangles: ${resolveBoxCount(record.winner)}`;
+  }
+}
+
+/**
  * Handle opening/closing of the detailed leaderboard per day.
  */
-function toggleDayDetails(dayNumber, button, collapse) {
-  const dayId = String(dayNumber);
-  const record = state.dayLookup.get(dayId);
+function toggleDayDetails(record, button, collapse) {
   if (!record) {
     return;
   }
 
-  if (!record.warningAcknowledged) {
+  const dayId = String(record.dayNumber);
+  const storedRecord = state.dayLookup.get(dayId) ?? record;
+
+  if (!storedRecord.warningAcknowledged) {
     const proceed = window.confirm(HEAVY_VIEW_WARNING);
     if (!proceed) {
       return;
     }
-    record.warningAcknowledged = true;
+    storedRecord.warningAcknowledged = true;
   }
 
   const willOpen = collapse.hidden;
@@ -420,8 +416,8 @@ function toggleDayDetails(dayNumber, button, collapse) {
     return;
   }
 
-  if (!record.loaded) {
-    renderDayDetails(record, collapse);
+  if (!storedRecord.loaded) {
+    renderDayDetails(storedRecord, collapse);
   }
 }
 
@@ -449,7 +445,7 @@ function closeOtherDetails(exceptDayId) {
  * Render the heavy leaderboard list inside the collapse panel. We keep the logic isolated so
  * it can be reused if the day data changes in the future.
  */
-function renderDayDetails(record, container) {
+async function renderDayDetails(record, container) {
   container.innerHTML = '';
 
   const loader = document.createElement('div');
@@ -457,39 +453,202 @@ function renderDayDetails(record, container) {
   loader.innerHTML =
     '<span class="spinner" aria-hidden="true"></span><span>Loading leaderboard…</span>';
   container.append(loader);
+  try {
+    const players = await loadPlayersForDay(record);
 
-  // Defer the actual rendering to the next frame so the spinner paints immediately.
-  requestAnimationFrame(() => {
-    if (!record.sortedPlayers) {
-      record.sortedPlayers = [...record.players].sort((a, b) => a.rank - b.rank);
+    if (!players.length) {
+      container.innerHTML =
+        '<p class="no-results">No leaderboard entries were uploaded for this day.</p>';
+      record.loaded = true;
+      return;
     }
 
-    const list = document.createElement('ul');
-    list.className = 'player-list';
+    if (!record.sortedPlayers) {
+      record.sortedPlayers = [...players].sort((a, b) => a.rank - b.rank);
+    }
 
-    const fragment = document.createDocumentFragment();
-    record.sortedPlayers.forEach((player) => {
-      const item = document.createElement('li');
+    // Defer the heavy DOM work so the spinner can paint immediately, then swap
+    // it out on the next frame for the final list.
+    requestAnimationFrame(() => {
+      const list = document.createElement('ul');
+      list.className = 'player-list';
 
-      const left = document.createElement('div');
-      left.className = 'player-name';
-      left.innerHTML = `<strong>${ordinal(player.rank)}</strong>&nbsp; <a href="${buildInstagramLink(
-        player.name,
-      )}" target="_blank" rel="noopener noreferrer">${player.name}</a>`;
+      const fragment = document.createDocumentFragment();
+      record.sortedPlayers.forEach((player) => {
+        const item = document.createElement('li');
 
-      const right = document.createElement('span');
-      right.className = 'player-time';
-      right.textContent = `Time: ${player.time} • Rectangles: ${resolveBoxCount(player)}`;
+        const left = document.createElement('div');
+        left.className = 'player-name';
+        left.innerHTML = `<strong>${ordinal(player.rank)}</strong>&nbsp; <a href="${buildInstagramLink(
+          player.name,
+        )}" target="_blank" rel="noopener noreferrer">${player.name}</a>`;
 
-      item.append(left, right);
-      fragment.append(item);
+        const right = document.createElement('span');
+        right.className = 'player-time';
+        right.textContent = `Time: ${player.time} • Rectangles: ${resolveBoxCount(player)}`;
+
+        item.append(left, right);
+        fragment.append(item);
+      });
+
+      list.append(fragment);
+      container.innerHTML = '';
+      container.append(list);
+      record.loaded = true;
     });
+  } catch (error) {
+    console.error(error);
+    container.innerHTML = `<p class="no-results">Failed to load day ${record.dayNumber}. ${error.message}</p>`;
+  }
+}
 
-    list.append(fragment);
-    container.innerHTML = '';
-    container.append(list);
-    record.loaded = true;
+// --- Firebase helpers ----------------------------------------------------------------------
+
+/**
+ * Load the full leaderboard for a specific day. Results are cached on the day record so
+ * subsequent requests reuse the already-downloaded payload.
+ */
+async function loadPlayersForDay(record) {
+  if (Array.isArray(record.players)) {
+    return record.players;
+  }
+
+  if (record.playersPromise) {
+    return record.playersPromise;
+  }
+
+  const encodedKey = encodeURIComponent(record.firebaseKey);
+  const playersUrl = `${DATABASE_ROOT}/${DAY_STATS_PATH}/${encodedKey}/players.json`;
+
+  record.playersPromise = (async () => {
+    const payload = await fetchJson(playersUrl, {
+      context: `players for day ${record.dayNumber}`,
+      allowMissing: true,
+    });
+    const players = normalisePlayers(payload);
+    record.players = players;
+    record.sortedPlayers = null;
+    if (!record.winner && players.length) {
+      record.winner = players[0];
+      updateWinnerPreview(record);
+    }
+    return players;
+  })();
+
+  try {
+    return await record.playersPromise;
+  } finally {
+    record.playersPromise = null;
+  }
+}
+
+/**
+ * Convert Firebase's array/object hybrid structure into a clean array ordered by rank.
+ */
+function normalisePlayers(rawPlayers) {
+  if (!rawPlayers) {
+    return [];
+  }
+
+  let values;
+  if (Array.isArray(rawPlayers)) {
+    values = rawPlayers;
+  } else {
+    const sortedKeys = Object.keys(rawPlayers).sort((a, b) => Number(a) - Number(b));
+    values = sortedKeys.map((key) => rawPlayers[key]);
+  }
+
+  return values
+    .filter((player) => player && typeof player.name === 'string')
+    .map((player) => ({
+      name: player.name,
+      rank: Number.isFinite(Number(player.rank)) ? Number(player.rank) : Number.POSITIVE_INFINITY,
+      time: typeof player.time === 'string' ? player.time : '00:00.000',
+      boxs: player.boxs,
+    }));
+}
+
+/**
+ * Ask Firebase for only the first player (the daily winner) so we can populate the card.
+ */
+async function loadWinnerPreview(firebaseKey) {
+  const encodedKey = encodeURIComponent(firebaseKey);
+  const url = `${DATABASE_ROOT}/${DAY_STATS_PATH}/${encodedKey}/players.json${WINNER_QUERY}`;
+  const payload = await fetchJson(url, {
+    context: `winner preview for key ${firebaseKey}`,
+    allowMissing: true,
   });
+
+  if (!payload) {
+    return null;
+  }
+
+  let winner;
+  if (Array.isArray(payload)) {
+    [winner] = payload;
+  } else {
+    const firstKey = Object.keys(payload).sort((a, b) => Number(a) - Number(b))[0];
+    winner = payload[firstKey];
+  }
+
+  if (!winner) {
+    return null;
+  }
+
+  return {
+    name: winner.name ?? '—',
+    rank: Number.isFinite(Number(winner.rank)) ? Number(winner.rank) : 1,
+    time: typeof winner.time === 'string' ? winner.time : '00:00.000',
+    boxs: winner.boxs,
+  };
+}
+
+/**
+ * Minimal wrapper around fetch that normalises Firebase errors and optionally tolerates 404s.
+ */
+async function fetchJson(url, { context = url, allowMissing = false } = {}) {
+  let response;
+  try {
+    response = await fetch(url, { cache: 'no-cache' });
+  } catch (networkError) {
+    throw new Error(`${context} – network error`);
+  }
+
+  if (response.status === 404) {
+    if (allowMissing) {
+      return null;
+    }
+    throw new Error(`${context} (404)`);
+  }
+
+  if (!response.ok) {
+    throw new Error(`${context} (${response.status})`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Execute asynchronous work with a concurrency limit to avoid spamming Firebase with requests.
+ */
+async function mapWithConcurrency(items, limit, iterator) {
+  if (!items.length) {
+    return [];
+  }
+
+  const queue = [...items];
+  const results = [];
+  const workers = Array.from({ length: Math.min(limit, queue.length) }, async () => {
+    while (queue.length) {
+      const next = queue.shift();
+      // eslint-disable-next-line no-await-in-loop
+      const result = await iterator(next);
+      results.push(result);
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
 }
 
 // --- Player search -------------------------------------------------------------------------
@@ -501,7 +660,7 @@ function ensurePlayerIndex() {
   if (state.playerIndexReady) {
     setPlayerLoading(false);
     setPlayerControlsDisabled(false);
-    return;
+    return state.playerIndex;
   }
 
   if (!state.days.length) {
@@ -509,39 +668,61 @@ function ensurePlayerIndex() {
     state.playerIndexRequestedBeforeReady = true;
     setPlayerLoading(true);
     setPlayerControlsDisabled(true);
-    return;
+    return null;
   }
 
   setPlayerLoading(true);
   setPlayerControlsDisabled(true);
 
-  const index = new Map();
-  state.days.forEach((day) => {
-    day.players.forEach((player) => {
-      const key = player.name.trim().toLowerCase();
-      if (!index.has(key)) {
-        index.set(key, {
-          name: player.name,
-          records: [],
+  if (playerIndexPromise) {
+    return playerIndexPromise;
+  }
+
+  playerIndexPromise = (async () => {
+    try {
+      const index = new Map();
+      for (const record of state.days) {
+        const players = await loadPlayersForDay(record);
+        players.forEach((player) => {
+          const key = player.name.trim().toLowerCase();
+          if (!index.has(key)) {
+            index.set(key, {
+              name: player.name,
+              records: [],
+            });
+          }
+          const entry = index.get(key);
+          entry.records.push({
+            day: record.dayNumber,
+            rank: player.rank,
+            time: player.time,
+            seconds: parseTimeToSeconds(player.time),
+            boxs: resolveBoxCount(player),
+          });
         });
       }
-      const entry = index.get(key);
-      entry.records.push({
-        day: day.day,
-        rank: player.rank,
-        time: player.time,
-        seconds: parseTimeToSeconds(player.time),
-        boxs: resolveBoxCount(player),
-      });
-    });
-  });
 
-  state.playerIndex = index;
-  state.playerIndexReady = true;
-  state.playerIndexRequestedBeforeReady = false;
-  populatePlayerSuggestions();
-  setPlayerLoading(false);
-  setPlayerControlsDisabled(false);
+      state.playerIndex = index;
+      state.playerIndexReady = true;
+      state.playerIndexRequestedBeforeReady = false;
+      populatePlayerSuggestions();
+      if (playerSearchInput && playerSearchInput.value.trim()) {
+        updatePlayerResults();
+      }
+      return index;
+    } catch (error) {
+      console.error(error);
+      playerResultsContainer.innerHTML =
+        '<p class="no-results">Unable to build the player index right now.</p>';
+      return null;
+    } finally {
+      playerIndexPromise = null;
+      setPlayerLoading(false);
+      setPlayerControlsDisabled(false);
+    }
+  })();
+
+  return playerIndexPromise;
 }
 
 /**
