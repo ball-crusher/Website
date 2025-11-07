@@ -1,31 +1,57 @@
 /**
  * High level controller for the Ball Crusher stats dashboard.
- * The previous version rendered every player eagerly and drove a canvas animation.
- * That looked nice, but on huge data dumps it produced thousands of DOM nodes
- * and expensive layout/paint work up-front. This file now focuses on:
- *   1. Fetching once and showing only lightweight winner previews initially.
- *   2. Lazy-rendering the heavy leaderboards when the viewer explicitly asks.
- *   3. Preparing player search infrastructure only when the Player tab is opened.
- *   4. Keeping every function small, documented, and easy to tweak.
+ *
+ * ✨ Neue Architektur (2024 refresh): Die Statistiken leben jetzt in der
+ * Firebase Realtime Database. Statt eine gigantische JSON-Datei herunterzuladen
+ * holen wir uns immer nur genau die Informationen, die der Nutzer gerade
+ * benötigt. Das reduziert sowohl die Bandbreite als auch die Renderkosten auf
+ * langsamen Geräten enorm.
+ *
+ * Das Skript konzentriert sich auf vier Hauptaufgaben:
+ *   1. Initial nur eine extrem leichte Tagesübersicht mit Gewinnern anzeigen.
+ *   2. Die schweren Leaderboards erst laden, wenn der Nutzer sie tatsächlich
+ *      öffnet.
+ *   3. Die Player-Suche nur dann initialisieren, wenn der entsprechende Tab
+ *      aktiv wird.
+ *   4. Sehr ausführlich kommentieren, damit zukünftige Änderungen leicht
+ *      nachvollziehbar bleiben (siehe User-Wunsch "Kommentiere viel").
  */
 
-// We previously served every day in a single JSON file, but that forced us to
-// ship a very large payload even when only a handful of records changed. The
-// dashboard now looks for a series of chunked files that follow the pattern
-// `data_stats1.json`, `data_stats2.json`, … inside the `data/` directory. Each
-// chunk contains a `day_stats` array, and we stitch every chunk together at
-// runtime so the rest of the rendering logic can stay exactly the same.
-const DATA_FILE_SUFFIX = '.json';
-// Some editors name the chunked payloads `data_statsN.json`, while others use
-// the slightly different `day_statsN.json` scheme. Supporting both avoids
-// forcing the content team to rename historical exports when a typo slips in.
-const DATA_FILE_PREFIXES = ['data/data_stats', 'data/day_stats'];
-// Guard rail so a misconfigured server cannot trap us in an endless loop if it
-// keeps returning successful responses for every index.
-const MAX_DATA_FILES = 50;
-// Backwards compatibility: if no chunked files exist we still attempt to read
-// the legacy single-file endpoint so older datasets continue to work.
-const LEGACY_DATA_URL = 'data/day_stats.json';
+// Firebase SDK: Wir nutzen die offiziellen ES-Module direkt vom CDN. Dadurch
+// sparen wir uns ein Build-Setup und bleiben komplett statisch hostbar.
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
+import {
+  getDatabase,
+  ref,
+  get,
+  query,
+  orderByChild,
+  limitToFirst,
+} from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
+
+// Firebase-Konfiguration exakt wie vom Nutzer geliefert. Die Werte sind hier
+// bewusst im Code hinterlegt, da es sich um eine öffentliche Client-App
+// handelt. Secrets wie die apiKey sind in diesem Kontext ohnehin nicht
+// vertraulich.
+const firebaseConfig = {
+  apiKey: 'AIzaSyBzJZID0nKdpIIcjCuMbKnnq_pZ8nJS2WA',
+  authDomain: 'ball-crusher-c9db6.firebaseapp.com',
+  databaseURL: 'https://ball-crusher-c9db6-default-rtdb.firebaseio.com',
+  projectId: 'ball-crusher-c9db6',
+  storageBucket: 'ball-crusher-c9db6.firebasestorage.app',
+  messagingSenderId: '220053775845',
+  appId: '1:220053775845:web:712522c6d2732583c9bb0c',
+  measurementId: 'G-T2YMQ278NC',
+};
+
+// App & Datenbank initialisieren. Wir behalten die Referenzen auf Modul-Ebene,
+// damit alle Helper darauf zugreifen können ohne erneutes Setup.
+const firebaseApp = initializeApp(firebaseConfig);
+const database = getDatabase(firebaseApp);
+
+// Der Realtime Database REST-Endpunkt – hilfreich für optimierte Abfragen wie
+// `shallow=true`, die das SDK selbst nicht anbietet.
+const databaseRestUrl = `${firebaseConfig.databaseURL.replace(/\/$/, '')}`;
 
 // --- DOM lookups ---------------------------------------------------------------------------
 
@@ -46,18 +72,30 @@ const viewSections = Array.from(document.querySelectorAll('[data-view]'));
 // --- Shared state --------------------------------------------------------------------------
 
 const state = {
-  /** Sorted list of day objects exactly as received from the JSON file. */
+  /**
+   * Liste aller Tage in aufsteigender Datenqualität:
+   *   - firebaseKey: Referenzpfad innerhalb der RTDB.
+   *   - day: Numerischer Tag (für Sortierung und Labels).
+   *   - winner: Minimales Spielerobjekt, reicht für die Karten-Vorschau.
+   */
   days: [],
-  /** Quick lookup by day number so we can hydrate cards lazily. */
+  /**
+   * Lookup nach Day-Nummer. Enthält zusätzlich Caching-Felder für geladene
+   * Spielerlisten und den Renderstatus der Detailansicht.
+   */
   dayLookup: new Map(),
-  /** Cache for the per-player aggregates used in the Player Stats view. */
+  /**
+   * Speicher für den Player-Index (Aggregation aller Spieler über alle Tage).
+   */
   playerIndex: new Map(),
-  /** Flag that prevents building the heavy index multiple times. */
+  /** Flag, ob der Index bereits vollständig aufgebaut wurde. */
   playerIndexReady: false,
-  /** Remember whether the user attempted to open the player view before data arrived. */
+  /** Merker, falls der Nutzer den Player-Tab vor Abschluss des Ladevorgangs öffnet. */
   playerIndexRequestedBeforeReady: false,
-  /** Stores the player currently shown in the Player Stats cards. */
+  /** Aktuell ausgewählter Spieler in der Detailansicht. */
   currentPlayer: null,
+  /** Laufende Promise zum Aufbau des Player-Index, verhindert Doppelarbeit. */
+  playerIndexPromise: null,
 };
 
 // Copy we reuse in multiple warnings / loaders.
@@ -157,19 +195,20 @@ setPlayerControlsDisabled(true);
 async function loadStats() {
   setOpenStatsLoading(true);
   try {
-    // Pull every chunked file we can find and flatten the resulting lists. The
-    // helper takes care of falling back to the legacy single JSON file when no
-    // chunked files are present.
-    const combinedStats = await loadAllStatsChunks();
+    // Statt eine gigantische JSON-Datei zu laden, holen wir zunächst nur die
+    // Tages-Summaries (Firebase-Key, Tag-Nummer, Gewinner). Das passiert via
+    // REST-Endpunkt mit `shallow=true`, wodurch wir lediglich eine Liste der
+    // vorhandenen Nodes erhalten.
+    const summaries = await fetchDaySummaries();
 
-    if (!combinedStats.length) {
+    if (!summaries.length) {
       throw new Error('No day stats available');
     }
 
-    initialiseDays(combinedStats);
+    initialiseDays(summaries);
   } catch (error) {
     console.error(error);
-    openStatsGrid.innerHTML = `<p class="no-results">${error.message}. Check the JSON endpoint.</p>`;
+    openStatsGrid.innerHTML = `<p class="no-results">${error.message}. Check the database.</p>`;
     playerResultsContainer.innerHTML = `<p class="no-results">${error.message}. Player search unavailable.</p>`;
     setPlayerLoading(false);
     setPlayerControlsDisabled(true);
@@ -179,103 +218,125 @@ async function loadStats() {
 }
 
 /**
- * Load every stats chunk following the `data_statsN.json` naming convention.
- *
- * The user now has the freedom to split the dataset into arbitrarily sized
- * files (for example, six days in `data_stats1.json` and seven in
- * `data_stats2.json`). We iterate over indexes starting at 1 and stop as soon
- * as we hit a 404, which indicates the sequence ended. The helper also falls
- * back to the historical `day_stats.json` file when no chunked files exist so
- * legacy deployments keep functioning without manual migration.
+ * Store the sorted day list and render the lightweight preview cards.
  */
-async function loadAllStatsChunks() {
-  const aggregated = [];
-  let filesFound = 0;
-
-  for (let index = 1; index <= MAX_DATA_FILES; index += 1) {
-    // Keep track of whether any of the prefix variations produced a valid file
-    // for the current index. We only stop scanning when every option returns a
-    // 404, which means the publisher has no more chunks for us to consume.
-    let chunkLoadedForIndex = false;
-
-    for (const prefix of DATA_FILE_PREFIXES) {
-      // Build the absolute URL using the candidate prefix. The prefixes already
-      // include the directory, so here we only attach the incrementing number
-      // and the common suffix.
-      const url = `${prefix}${index}${DATA_FILE_SUFFIX}`;
-
-      let response;
-      try {
-        response = await fetch(url, { cache: 'no-cache' });
-      } catch (networkError) {
-        // This is a hard failure (e.g. offline or CORS), so retrying a
-        // different prefix would not magically fix the issue. Bubble the error
-        // up to the caller so we can show a helpful message to the viewer.
-        throw new Error(`Network error while loading ${url}`);
-      }
-
-      if (response.status === 404) {
-        // A 404 simply means the current prefix does not exist for this index.
-        // We try the next prefix before deciding whether the sequence ended.
-        continue;
-      }
-
-      if (!response.ok) {
-        // Any other status code (500s, 403s, etc.) should be surfaced to the
-        // maintainer so they can investigate the backend configuration.
-        throw new Error(`Failed to load ${url} (${response.status})`);
-      }
-
-      const payload = await response.json();
-      if (!payload || !Array.isArray(payload.day_stats)) {
-        // When a file exists but its structure changed unexpectedly we also
-        // abort early, as rendering bogus data would be misleading.
-        throw new Error(`Unexpected data format in ${url}`);
-      }
-
-      aggregated.push(...payload.day_stats);
-      filesFound += 1;
-      chunkLoadedForIndex = true;
-
-      // Once one prefix yielded a proper payload we stop checking further
-      // prefixes for the same index to avoid duplicating data.
-      break;
-    }
-
-    if (!chunkLoadedForIndex) {
-      // Every prefix produced a 404 for this index, which indicates the
-      // sequence of chunked files ended. Breaking keeps the loop tight even if
-      // the author accidentally leaves extra gaps at the end.
-      break;
-    }
+/**
+ * Lade alle verfügbaren Tage samt Gewinnern extrem sparsam.
+ *
+ * Vorgehen:
+ *   1. `shallow=true` liefert uns nur die Keys (0, 1, 2, …) der vorhandenen Tage.
+ *   2. Für jeden Key holen wir die `day`-Nummer (ein einzelner Wert) und den
+ *      bestplatzierten Spieler per `orderBy="rank" & limitToFirst=1`.
+ *   3. Das Ergebnis sind super kleine Responses (<1 KB pro Tag), perfekt für
+ *      Mobile.
+ */
+async function fetchDaySummaries() {
+  // Schritt 1: Keys abfragen. Die Antwort ist ein Objekt wie { "0": true, "1": true }.
+  const keysResponse = await fetch(`${databaseRestUrl}/day_stats.json?shallow=true`);
+  if (!keysResponse.ok) {
+    throw new Error(`Failed to list day stats (${keysResponse.status})`);
   }
 
-  // If the loop never found a chunked file we revert to the legacy single
-  // endpoint. This keeps older datasets functional and gives the editor time to
-  // migrate gradually.
-  if (filesFound === 0) {
-    const legacyResponse = await fetch(LEGACY_DATA_URL, { cache: 'no-cache' });
-    if (!legacyResponse.ok) {
-      throw new Error(`Failed to load stats (${legacyResponse.status})`);
-    }
-
-    const legacyPayload = await legacyResponse.json();
-    if (!legacyPayload || !Array.isArray(legacyPayload.day_stats)) {
-      throw new Error('Unexpected data format');
-    }
-
-    aggregated.push(...legacyPayload.day_stats);
+  const keysData = await keysResponse.json();
+  if (!keysData) {
+    return [];
   }
 
-  return aggregated;
+  const firebaseKeys = Object.keys(keysData);
+  if (!firebaseKeys.length) {
+    return [];
+  }
+
+  // Schritt 2 + 3: Pro Key parallel Meta-Informationen sammeln.
+  const summaryPromises = firebaseKeys.map(async (firebaseKey) => {
+    const [dayNumber, winner] = await Promise.all([
+      fetchDayNumber(firebaseKey),
+      fetchDayWinner(firebaseKey),
+    ]);
+
+    return {
+      firebaseKey,
+      day: dayNumber,
+      winner,
+    };
+  });
+
+  const summaries = await Promise.all(summaryPromises);
+
+  // Konsistenz: Nach Day-Nummer sortieren (absteigend, damit Tag x aktuell oben steht).
+  return summaries
+    .filter((summary) => Number.isFinite(summary.day))
+    .sort((a, b) => b.day - a.day);
+}
+
+/** Einzelne `day`-Nummer lesen (minimaler GET auf /day_stats/<key>/day). */
+async function fetchDayNumber(firebaseKey) {
+  const response = await fetch(`${databaseRestUrl}/day_stats/${firebaseKey}/day.json`);
+  if (!response.ok) {
+    throw new Error(`Failed to load day number for ${firebaseKey} (${response.status})`);
+  }
+
+  const value = await response.json();
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`Invalid day value for ${firebaseKey}`);
+  }
+  return parsed;
 }
 
 /**
- * Store the sorted day list and render the lightweight preview cards.
+ * Den Gewinner eines Tages ermitteln, ohne alle Spieler herunterzuladen.
+ * Wir nutzen eine sortierte Abfrage: orderByChild('rank') + limitToFirst(1).
  */
-function initialiseDays(dayStats) {
-  // Sort once so the UI remains consistent even if the API changes order.
-  state.days = [...dayStats].sort((a, b) => b.day - a.day);
+async function fetchDayWinner(firebaseKey) {
+  // Wir verwenden hier das SDK, weil es automatisch Query-Parameter korrekt kodiert
+  // und Auth-Handling übernimmt.
+  const winnerQuery = query(
+    ref(database, `day_stats/${firebaseKey}/players`),
+    orderByChild('rank'),
+    limitToFirst(1),
+  );
+
+  const snapshot = await get(winnerQuery);
+  if (!snapshot.exists()) {
+    return null;
+  }
+
+  const data = snapshot.val();
+  const players = Array.isArray(data) ? data : Object.values(data);
+  return players[0] ?? null;
+}
+
+/**
+ * Volle Spielerlisten eines Tages laden – nur wenn wirklich benötigt.
+ */
+async function fetchDayPlayers(firebaseKey) {
+  const response = await fetch(`${databaseRestUrl}/day_stats/${firebaseKey}/players.json`);
+  if (!response.ok) {
+    throw new Error(`Failed to load players for ${firebaseKey} (${response.status})`);
+  }
+
+  const payload = await response.json();
+  if (!payload) {
+    return [];
+  }
+
+  return normalizePlayerCollection(payload);
+}
+
+/**
+ * Hilfsfunktion: Firebase kann Arrays als Objekte mit Indizes liefern. Wir
+ * konvertieren alles in ein echtes Array und filtern Null-Einträge heraus.
+ */
+function normalizePlayerCollection(collection) {
+  if (Array.isArray(collection)) {
+    return collection.filter(Boolean);
+  }
+  return Object.values(collection).filter(Boolean);
+}
+
+function initialiseDays(daySummaries) {
+  state.days = [...daySummaries];
   state.dayLookup.clear();
 
   if (!state.days.length) {
@@ -287,9 +348,9 @@ function initialiseDays(dayStats) {
   state.days.forEach((day) => {
     state.dayLookup.set(String(day.day), {
       day,
-      // We only calculate the winner immediately; the rest is deferred.
-      winner: resolveWinner(day.players),
-      players: day.players,
+      firebaseKey: day.firebaseKey,
+      winner: day.winner,
+      players: null,
       sortedPlayers: null,
       loaded: false,
       warningAcknowledged: false,
@@ -302,27 +363,11 @@ function initialiseDays(dayStats) {
   openStatsGrid.append(fragment);
 
   if (state.playerIndexRequestedBeforeReady) {
-    // The viewer attempted to open the tab before data was present. Honour that intent now.
     ensurePlayerIndex();
   } else {
-    // Data is available, so the controls can be re-enabled even if the player index
-    // has not been requested yet.
     setPlayerLoading(false);
     setPlayerControlsDisabled(false);
   }
-}
-
-/**
- * Identify the first-place finisher without allocating additional arrays.
- */
-function resolveWinner(players = []) {
-  let best = null;
-  players.forEach((player) => {
-    if (!best || Number(player.rank) < Number(best.rank)) {
-      best = player;
-    }
-  });
-  return best;
 }
 
 /**
@@ -421,7 +466,7 @@ function toggleDayDetails(dayNumber, button, collapse) {
   }
 
   if (!record.loaded) {
-    renderDayDetails(record, collapse);
+    loadAndRenderDayDetails(record, collapse);
   }
 }
 
@@ -449,6 +494,36 @@ function closeOtherDetails(exceptDayId) {
  * Render the heavy leaderboard list inside the collapse panel. We keep the logic isolated so
  * it can be reused if the day data changes in the future.
  */
+async function loadAndRenderDayDetails(record, container) {
+  container.innerHTML = '';
+
+  const loader = document.createElement('div');
+  loader.className = 'inline-loader';
+  loader.innerHTML =
+    '<span class="spinner" aria-hidden="true"></span><span>Loading leaderboard…</span>';
+  container.append(loader);
+
+  try {
+    if (!record.players) {
+      // Spieler erst jetzt ziehen – so sparen wir uns dutzende Requests bei
+      // Nutzern, die nur schnell den Gewinner checken wollen.
+      record.players = await fetchDayPlayers(record.firebaseKey);
+    }
+
+    if (!record.sortedPlayers) {
+      record.sortedPlayers = [...record.players].sort(
+        (a, b) => Number(a.rank ?? Infinity) - Number(b.rank ?? Infinity),
+      );
+    }
+
+    renderDayDetails(record, container);
+    record.loaded = true;
+  } catch (error) {
+    console.error(error);
+    container.innerHTML = `<p class="no-results">${error.message ?? 'Failed to load leaderboard.'}</p>`;
+  }
+}
+
 function renderDayDetails(record, container) {
   container.innerHTML = '';
 
@@ -460,8 +535,9 @@ function renderDayDetails(record, container) {
 
   // Defer the actual rendering to the next frame so the spinner paints immediately.
   requestAnimationFrame(() => {
-    if (!record.sortedPlayers) {
-      record.sortedPlayers = [...record.players].sort((a, b) => a.rank - b.rank);
+    if (!record.sortedPlayers || record.sortedPlayers.length === 0) {
+      container.innerHTML = '<p class="no-results">No stats available for this day.</p>';
+      return;
     }
 
     const list = document.createElement('ul');
@@ -488,7 +564,6 @@ function renderDayDetails(record, container) {
     list.append(fragment);
     container.innerHTML = '';
     container.append(list);
-    record.loaded = true;
   });
 }
 
@@ -504,8 +579,16 @@ function ensurePlayerIndex() {
     return;
   }
 
+  if (state.playerIndexPromise) {
+    // Ein Aufbau läuft bereits – wir müssen nur sicherstellen, dass die UI den
+    // Ladezustand zeigt. Sobald die Promise resolved, werden die Controls
+    // automatisch wieder aktiviert.
+    setPlayerLoading(true);
+    setPlayerControlsDisabled(true);
+    return;
+  }
+
   if (!state.days.length) {
-    // Data is still loading, so surface the spinner and remember to retry when ready.
     state.playerIndexRequestedBeforeReady = true;
     setPlayerLoading(true);
     setPlayerControlsDisabled(true);
@@ -515,9 +598,41 @@ function ensurePlayerIndex() {
   setPlayerLoading(true);
   setPlayerControlsDisabled(true);
 
+  state.playerIndexPromise = buildPlayerIndex()
+    .catch((error) => {
+      console.error(error);
+      playerResultsContainer.innerHTML = `<p class="no-results">${error.message ?? 'Player index failed to load.'}</p>`;
+    })
+    .finally(() => {
+      state.playerIndexPromise = null;
+      setPlayerLoading(false);
+      setPlayerControlsDisabled(false);
+    });
+}
+
+async function buildPlayerIndex() {
   const index = new Map();
-  state.days.forEach((day) => {
-    day.players.forEach((player) => {
+
+  for (const day of state.days) {
+    const record = state.dayLookup.get(String(day.day));
+    if (!record) continue;
+
+    try {
+      if (!record.players) {
+        record.players = await fetchDayPlayers(record.firebaseKey);
+        // Falls ein Day später erneut geöffnet wird, möchten wir die bereits
+        // geladene Liste nutzen. Deshalb speichern wir sie direkt im Record.
+      }
+    } catch (error) {
+      console.error(error);
+      continue;
+    }
+
+    record.players.forEach((player) => {
+      if (!player?.name) {
+        return;
+      }
+
       const key = player.name.trim().toLowerCase();
       if (!index.has(key)) {
         index.set(key, {
@@ -534,14 +649,12 @@ function ensurePlayerIndex() {
         boxs: resolveBoxCount(player),
       });
     });
-  });
+  }
 
   state.playerIndex = index;
   state.playerIndexReady = true;
   state.playerIndexRequestedBeforeReady = false;
   populatePlayerSuggestions();
-  setPlayerLoading(false);
-  setPlayerControlsDisabled(false);
 }
 
 /**
