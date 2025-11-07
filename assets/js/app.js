@@ -43,6 +43,11 @@ const WINNER_QUERY = '?orderBy=%22%24key%22&limitToFirst=1';
 // visitor's device, so we cap the number of concurrent network trips.
 const MAX_PARALLEL_REQUESTS = 6;
 
+// Building the player index requires downloading the full leaderboard for every day.
+// Even though each request is independent, firing them all at once can create spikes.
+// A slightly lower limit keeps things responsive while still saturating the network.
+const PLAYER_INDEX_CONCURRENCY = 4;
+
 // --- DOM lookups ---------------------------------------------------------------------------
 
 const openStatsGrid = document.getElementById('open-stats-grid');
@@ -681,16 +686,24 @@ function ensurePlayerIndex() {
   playerIndexPromise = (async () => {
     try {
       const index = new Map();
-      for (const record of state.days) {
+
+      // Process day leaderboards with a concurrency limit so we can hydrate the cache quickly
+      // without overwhelming the network stack (or the Firebase quota). We reuse the shared
+      // utility that already handles fair scheduling for us.
+      await mapWithConcurrency(state.days, PLAYER_INDEX_CONCURRENCY, async (record) => {
         const players = await loadPlayersForDay(record);
+
         players.forEach((player) => {
-          const key = player.name.trim().toLowerCase();
+          const trimmedName = player.name.trim();
+          const key = trimmedName.toLowerCase();
+
           if (!index.has(key)) {
             index.set(key, {
-              name: player.name,
+              name: trimmedName,
               records: [],
             });
           }
+
           const entry = index.get(key);
           entry.records.push({
             day: record.dayNumber,
@@ -700,7 +713,7 @@ function ensurePlayerIndex() {
             boxs: resolveBoxCount(player),
           });
         });
-      }
+      });
 
       state.playerIndex = index;
       state.playerIndexReady = true;
