@@ -9,23 +9,15 @@
  *   4. Keeping every function small, documented, and easy to tweak.
  */
 
-// We previously served every day in a single JSON file, but that forced us to
-// ship a very large payload even when only a handful of records changed. The
-// dashboard now looks for a series of chunked files that follow the pattern
-// `data_stats1.json`, `data_stats2.json`, … inside the `data/` directory. Each
-// chunk contains a `day_stats` array, and we stitch every chunk together at
-// runtime so the rest of the rendering logic can stay exactly the same.
-const DATA_FILE_SUFFIX = '.json';
-// Some editors name the chunked payloads `data_statsN.json`, while others use
-// the slightly different `day_statsN.json` scheme. Supporting both avoids
-// forcing the content team to rename historical exports when a typo slips in.
-const DATA_FILE_PREFIXES = ['data/data_stats', 'data/day_stats'];
-// Guard rail so a misconfigured server cannot trap us in an endless loop if it
-// keeps returning successful responses for every index.
-const MAX_DATA_FILES = 50;
-// Backwards compatibility: if no chunked files exist we still attempt to read
-// the legacy single-file endpoint so older datasets continue to work.
-const LEGACY_DATA_URL = 'data/day_stats.json';
+// New data pipeline: a CSV catalog maps every day to its dedicated JSON file.
+// Column 1 holds the filename (e.g. "42.json"), which also doubles as the day
+// identifier for the UI. Column 2 stores the absolute URL where the JSON can
+// be fetched. This keeps the HTML bundle light while letting content editors
+// update links without touching the codebase.
+const LINKS_CSV_URL = 'data/json_links.csv';
+// The catalog can grow quickly, so we cap concurrent network calls to avoid
+// overwhelming low-end devices while still fetching aggressively.
+const MAX_PARALLEL_FETCHES = 6;
 
 // --- DOM lookups ---------------------------------------------------------------------------
 
@@ -157,10 +149,10 @@ setPlayerControlsDisabled(true);
 async function loadStats() {
   setOpenStatsLoading(true);
   try {
-    // Pull every chunked file we can find and flatten the resulting lists. The
-    // helper takes care of falling back to the legacy single JSON file when no
-    // chunked files are present.
-    const combinedStats = await loadAllStatsChunks();
+    // The new pipeline starts by reading the CSV catalog to discover every day
+    // available. We then fetch each JSON payload (with limited concurrency) and
+    // convert them into the structure the rest of the UI expects.
+    const combinedStats = await loadAllDayStats();
 
     if (!combinedStats.length) {
       throw new Error('No day stats available');
@@ -179,95 +171,141 @@ async function loadStats() {
 }
 
 /**
- * Load every stats chunk following the `data_statsN.json` naming convention.
- *
- * The user now has the freedom to split the dataset into arbitrarily sized
- * files (for example, six days in `data_stats1.json` and seven in
- * `data_stats2.json`). We iterate over indexes starting at 1 and stop as soon
- * as we hit a 404, which indicates the sequence ended. The helper also falls
- * back to the historical `day_stats.json` file when no chunked files exist so
- * legacy deployments keep functioning without manual migration.
+ * Load every day listed in the CSV catalog and return a flat array of
+ * `{ day, players }` objects. All network work is capped by
+ * `MAX_PARALLEL_FETCHES` to keep memory usage predictable.
  */
-async function loadAllStatsChunks() {
-  const aggregated = [];
-  let filesFound = 0;
-
-  for (let index = 1; index <= MAX_DATA_FILES; index += 1) {
-    // Keep track of whether any of the prefix variations produced a valid file
-    // for the current index. We only stop scanning when every option returns a
-    // 404, which means the publisher has no more chunks for us to consume.
-    let chunkLoadedForIndex = false;
-
-    for (const prefix of DATA_FILE_PREFIXES) {
-      // Build the absolute URL using the candidate prefix. The prefixes already
-      // include the directory, so here we only attach the incrementing number
-      // and the common suffix.
-      const url = `${prefix}${index}${DATA_FILE_SUFFIX}`;
-
-      let response;
-      try {
-        response = await fetch(url, { cache: 'no-cache' });
-      } catch (networkError) {
-        // This is a hard failure (e.g. offline or CORS), so retrying a
-        // different prefix would not magically fix the issue. Bubble the error
-        // up to the caller so we can show a helpful message to the viewer.
-        throw new Error(`Network error while loading ${url}`);
-      }
-
-      if (response.status === 404) {
-        // A 404 simply means the current prefix does not exist for this index.
-        // We try the next prefix before deciding whether the sequence ended.
-        continue;
-      }
-
-      if (!response.ok) {
-        // Any other status code (500s, 403s, etc.) should be surfaced to the
-        // maintainer so they can investigate the backend configuration.
-        throw new Error(`Failed to load ${url} (${response.status})`);
-      }
-
-      const payload = await response.json();
-      if (!payload || !Array.isArray(payload.day_stats)) {
-        // When a file exists but its structure changed unexpectedly we also
-        // abort early, as rendering bogus data would be misleading.
-        throw new Error(`Unexpected data format in ${url}`);
-      }
-
-      aggregated.push(...payload.day_stats);
-      filesFound += 1;
-      chunkLoadedForIndex = true;
-
-      // Once one prefix yielded a proper payload we stop checking further
-      // prefixes for the same index to avoid duplicating data.
-      break;
-    }
-
-    if (!chunkLoadedForIndex) {
-      // Every prefix produced a 404 for this index, which indicates the
-      // sequence of chunked files ended. Breaking keeps the loop tight even if
-      // the author accidentally leaves extra gaps at the end.
-      break;
-    }
+async function loadAllDayStats() {
+  const catalog = await fetchLinksCatalog();
+  if (!catalog.length) {
+    throw new Error('No entries in links catalog');
   }
 
-  // If the loop never found a chunked file we revert to the legacy single
-  // endpoint. This keeps older datasets functional and gives the editor time to
-  // migrate gradually.
-  if (filesFound === 0) {
-    const legacyResponse = await fetch(LEGACY_DATA_URL, { cache: 'no-cache' });
-    if (!legacyResponse.ok) {
-      throw new Error(`Failed to load stats (${legacyResponse.status})`);
-    }
+  const dayPayloads = await fetchDayFiles(catalog);
+  return dayPayloads;
+}
 
-    const legacyPayload = await legacyResponse.json();
-    if (!legacyPayload || !Array.isArray(legacyPayload.day_stats)) {
-      throw new Error('Unexpected data format');
-    }
-
-    aggregated.push(...legacyPayload.day_stats);
+/**
+ * Download and parse the CSV that maps filenames to JSON endpoints. The first
+ * non-empty column is treated as the day identifier (derived from the
+ * filename), while the second column provides the absolute URL.
+ */
+async function fetchLinksCatalog() {
+  let response;
+  try {
+    response = await fetch(LINKS_CSV_URL, { cache: 'no-cache' });
+  } catch (networkError) {
+    // Adding detailed context here helps content editors verify whether the
+    // site is offline or the path is misconfigured.
+    throw new Error(`Network error while loading ${LINKS_CSV_URL}`);
   }
 
-  return aggregated;
+  if (!response.ok) {
+    throw new Error(`Failed to load ${LINKS_CSV_URL} (${response.status})`);
+  }
+
+  const csvText = await response.text();
+  const entries = parseCatalog(csvText);
+
+  if (!entries.length) {
+    throw new Error('Catalog CSV is empty or malformed');
+  }
+
+  return entries;
+}
+
+/**
+ * Convert the raw CSV text into a list of `{ day, url, filename }` objects.
+ * The CSV is intentionally simple, so we avoid heavy parsers and stick to
+ * string operations for speed.
+ */
+function parseCatalog(csvText) {
+  const lines = csvText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  // Skip the header row when present, but still allow catalogs that omit it to
+  // keep the ingestion path flexible.
+  const dataLines =
+    lines.length && lines[0].toLowerCase().startsWith('filename')
+      ? lines.slice(1)
+      : lines;
+
+  const entries = [];
+
+  dataLines.forEach((line) => {
+    const [filename, url] = line.split(',').map((part) => part?.trim());
+
+    // Guard against accidental blank columns that would otherwise create noisy
+    // runtime errors downstream.
+    if (!filename || !url) {
+      return;
+    }
+
+    const day = deriveDayFromFilename(filename);
+    entries.push({ day, url, filename });
+  });
+
+  return entries;
+}
+
+/**
+ * Strip the `.json` suffix and coerce the remaining string into a number when
+ * possible. Returning a number keeps the default day sorting intact; otherwise
+ * we fall back to the trimmed string.
+ */
+function deriveDayFromFilename(filename) {
+  const base = filename.replace(/\.json$/i, '').trim();
+  const numeric = Number.parseInt(base, 10);
+  return Number.isFinite(numeric) ? numeric : base;
+}
+
+/**
+ * Fetch every JSON payload with a small worker pool. This keeps the UI snappy
+ * because multiple files stream in parallel without overwhelming the network
+ * stack.
+ */
+async function fetchDayFiles(catalogEntries) {
+  const queue = [...catalogEntries];
+  const results = [];
+
+  // Simple worker that pulls from the shared queue until no entries remain.
+  const worker = async () => {
+    while (queue.length) {
+      const nextEntry = queue.shift();
+      const payload = await fetchDayPayload(nextEntry);
+      results.push(payload);
+    }
+  };
+
+  const workerCount = Math.min(MAX_PARALLEL_FETCHES, queue.length || 1);
+  const workers = Array.from({ length: workerCount }, () => worker());
+  await Promise.all(workers);
+
+  return results;
+}
+
+/**
+ * Retrieve a single day file and normalise it into the `{ day, players }`
+ * shape. Input validation happens here so downstream rendering code stays
+ * focused on presentation.
+ */
+async function fetchDayPayload(entry) {
+  const response = await fetch(entry.url, { cache: 'no-cache' });
+  if (!response.ok) {
+    throw new Error(`Failed to load ${entry.url} (${response.status})`);
+  }
+
+  const json = await response.json();
+  if (!json || !Array.isArray(json.players)) {
+    throw new Error(`Unexpected data format for day ${entry.day}`);
+  }
+
+  return {
+    day: entry.day,
+    players: json.players,
+  };
 }
 
 /**
