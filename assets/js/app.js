@@ -9,23 +9,15 @@
  *   4. Keeping every function small, documented, and easy to tweak.
  */
 
-// We previously served every day in a single JSON file, but that forced us to
-// ship a very large payload even when only a handful of records changed. The
-// dashboard now looks for a series of chunked files that follow the pattern
-// `data_stats1.json`, `data_stats2.json`, … inside the `data/` directory. Each
-// chunk contains a `day_stats` array, and we stitch every chunk together at
-// runtime so the rest of the rendering logic can stay exactly the same.
-const DATA_FILE_SUFFIX = '.json';
-// Some editors name the chunked payloads `data_statsN.json`, while others use
-// the slightly different `day_statsN.json` scheme. Supporting both avoids
-// forcing the content team to rename historical exports when a typo slips in.
-const DATA_FILE_PREFIXES = ['data/data_stats', 'data/day_stats'];
-// Guard rail so a misconfigured server cannot trap us in an endless loop if it
-// keeps returning successful responses for every index.
-const MAX_DATA_FILES = 50;
-// Backwards compatibility: if no chunked files exist we still attempt to read
-// the legacy single-file endpoint so older datasets continue to work.
-const LEGACY_DATA_URL = 'data/day_stats.json';
+// The new distribution model ships a single CSV file that lists every JSON
+// leaderboard alongside its fully qualified URL. This keeps the HTML payload
+// tiny while allowing editors to publish or revoke individual days without
+// touching code. The filename (e.g. "42.json") encodes the day number we will
+// use throughout the UI for sorting and labeling.
+const LINK_MANIFEST_URL = 'data/json_links.csv';
+// Normalise extensions in case the manifest contains unexpected whitespace or
+// casing – we treat anything ending with this suffix as a stats file.
+const JSON_EXTENSION = '.json';
 
 // --- DOM lookups ---------------------------------------------------------------------------
 
@@ -157,10 +149,10 @@ setPlayerControlsDisabled(true);
 async function loadStats() {
   setOpenStatsLoading(true);
   try {
-    // Pull every chunked file we can find and flatten the resulting lists. The
-    // helper takes care of falling back to the legacy single JSON file when no
-    // chunked files are present.
-    const combinedStats = await loadAllStatsChunks();
+    // Pull the manifest plus all referenced JSON payloads in parallel. The CSV
+    // approach keeps downloads lean and allows the data team to swap URLs
+    // without touching the codebase.
+    const combinedStats = await loadStatsFromManifest();
 
     if (!combinedStats.length) {
       throw new Error('No day stats available');
@@ -179,95 +171,127 @@ async function loadStats() {
 }
 
 /**
- * Load every stats chunk following the `data_statsN.json` naming convention.
+ * Load every day using the manifest-driven CSV format.
  *
- * The user now has the freedom to split the dataset into arbitrarily sized
- * files (for example, six days in `data_stats1.json` and seven in
- * `data_stats2.json`). We iterate over indexes starting at 1 and stop as soon
- * as we hit a 404, which indicates the sequence ended. The helper also falls
- * back to the historical `day_stats.json` file when no chunked files exist so
- * legacy deployments keep functioning without manual migration.
+ * The function is intentionally split into small, well-commented helpers so
+ * future contributors can tweak parsing rules or add validation without
+ * touching the rendering logic. Everything resolves to the legacy
+ * `{ day, players }` shape expected by the UI.
  */
-async function loadAllStatsChunks() {
-  const aggregated = [];
-  let filesFound = 0;
-
-  for (let index = 1; index <= MAX_DATA_FILES; index += 1) {
-    // Keep track of whether any of the prefix variations produced a valid file
-    // for the current index. We only stop scanning when every option returns a
-    // 404, which means the publisher has no more chunks for us to consume.
-    let chunkLoadedForIndex = false;
-
-    for (const prefix of DATA_FILE_PREFIXES) {
-      // Build the absolute URL using the candidate prefix. The prefixes already
-      // include the directory, so here we only attach the incrementing number
-      // and the common suffix.
-      const url = `${prefix}${index}${DATA_FILE_SUFFIX}`;
-
-      let response;
-      try {
-        response = await fetch(url, { cache: 'no-cache' });
-      } catch (networkError) {
-        // This is a hard failure (e.g. offline or CORS), so retrying a
-        // different prefix would not magically fix the issue. Bubble the error
-        // up to the caller so we can show a helpful message to the viewer.
-        throw new Error(`Network error while loading ${url}`);
-      }
-
-      if (response.status === 404) {
-        // A 404 simply means the current prefix does not exist for this index.
-        // We try the next prefix before deciding whether the sequence ended.
-        continue;
-      }
-
-      if (!response.ok) {
-        // Any other status code (500s, 403s, etc.) should be surfaced to the
-        // maintainer so they can investigate the backend configuration.
-        throw new Error(`Failed to load ${url} (${response.status})`);
-      }
-
-      const payload = await response.json();
-      if (!payload || !Array.isArray(payload.day_stats)) {
-        // When a file exists but its structure changed unexpectedly we also
-        // abort early, as rendering bogus data would be misleading.
-        throw new Error(`Unexpected data format in ${url}`);
-      }
-
-      aggregated.push(...payload.day_stats);
-      filesFound += 1;
-      chunkLoadedForIndex = true;
-
-      // Once one prefix yielded a proper payload we stop checking further
-      // prefixes for the same index to avoid duplicating data.
-      break;
-    }
-
-    if (!chunkLoadedForIndex) {
-      // Every prefix produced a 404 for this index, which indicates the
-      // sequence of chunked files ended. Breaking keeps the loop tight even if
-      // the author accidentally leaves extra gaps at the end.
-      break;
-    }
+async function loadStatsFromManifest() {
+  // First pull the CSV that lists every stats file and its public URL.
+  const manifestResponse = await fetch(LINK_MANIFEST_URL, { cache: 'no-cache' });
+  if (!manifestResponse.ok) {
+    throw new Error(`Failed to load manifest (${manifestResponse.status})`);
   }
 
-  // If the loop never found a chunked file we revert to the legacy single
-  // endpoint. This keeps older datasets functional and gives the editor time to
-  // migrate gradually.
-  if (filesFound === 0) {
-    const legacyResponse = await fetch(LEGACY_DATA_URL, { cache: 'no-cache' });
-    if (!legacyResponse.ok) {
-      throw new Error(`Failed to load stats (${legacyResponse.status})`);
-    }
-
-    const legacyPayload = await legacyResponse.json();
-    if (!legacyPayload || !Array.isArray(legacyPayload.day_stats)) {
-      throw new Error('Unexpected data format');
-    }
-
-    aggregated.push(...legacyPayload.day_stats);
+  const manifestText = await manifestResponse.text();
+  // Convert CSV rows into a structured array we can process programmatically.
+  const entries = parseManifest(manifestText);
+  if (!entries.length) {
+    throw new Error('No stats entries found in manifest');
   }
 
-  return aggregated;
+  // Fetch all referenced JSON files in parallel to minimise total wait time.
+  const resolvedDays = await Promise.all(entries.map(fetchDayFromEntry));
+
+  // Filter out any nulls in case a fetch failed softly; we already surface the
+  // failure in the console but avoid crashing the UI for a single bad link.
+  const cleaned = resolvedDays.filter(Boolean);
+  if (!cleaned.length) {
+    throw new Error('No stats files could be loaded');
+  }
+
+  return cleaned;
+}
+
+/**
+ * Translate the CSV manifest into an array of `{ day, url }` tuples.
+ */
+function parseManifest(csvText) {
+  // Split into lines, discard empty trailing lines, and skip the header row if
+  // present. The manifest is tiny so a straightforward approach stays fast and
+  // readable.
+  const rows = csvText
+    .trim()
+    .split(/\r?\n/)
+    .filter(Boolean);
+
+  // The manifest currently includes a header row ("filename,url"), but we keep
+  // the parser defensive: if someone removes the header we simply treat the
+  // first row as data instead of discarding it.
+  const [firstRow, ...rest] = rows;
+  const dataRows = firstRow?.toLowerCase().startsWith('filename') ? rest : rows;
+
+  return dataRows
+    .map((row) => row.split(',').map((value) => value.trim()))
+    .map(([filename, url]) => ({
+      day: deriveDayFromFilename(filename),
+      url,
+    }))
+    .filter((entry) => entry.day !== null && entry.url);
+}
+
+/**
+ * Extract the numeric day identifier from filenames such as "2.json".
+ */
+function deriveDayFromFilename(filename = '') {
+  const trimmed = filename.trim();
+  if (!trimmed.toLowerCase().endsWith(JSON_EXTENSION)) {
+    return null;
+  }
+
+  const numberPart = trimmed.replace(JSON_EXTENSION, '');
+  const parsed = Number.parseInt(numberPart, 10);
+  // We prefer integers because downstream sorting logic assumes a numeric day.
+  if (Number.isNaN(parsed)) {
+    return null;
+  }
+
+  return parsed;
+}
+
+/**
+ * Fetch a single day JSON given a manifest entry and normalise its shape.
+ */
+async function fetchDayFromEntry(entry) {
+  // Fail fast if the manifest contained malformed data instead of attempting a
+  // network request that would inevitably explode.
+  if (!entry?.url || entry.day === null || entry.day === undefined) {
+    console.warn('Skipping invalid manifest entry', entry);
+    return null;
+  }
+
+  let response;
+  try {
+    response = await fetch(entry.url, { cache: 'no-cache' });
+  } catch (networkError) {
+    // Keep the UI running even if a third-party host momentarily goes down; the
+    // console log gives maintainers enough context to retry or swap the link.
+    console.error(`Network error while loading ${entry.url}`, networkError);
+    return null;
+  }
+
+  if (!response.ok) {
+    console.error(`Failed to load ${entry.url} (${response.status})`);
+    return null;
+  }
+
+  let payload;
+  try {
+    payload = await response.json();
+  } catch (parseError) {
+    console.error(`Invalid JSON in ${entry.url}`, parseError);
+    return null;
+  }
+
+  // Normalise the payload to the shape expected by the rest of the codebase.
+  const players = Array.isArray(payload?.players) ? payload.players : [];
+
+  return {
+    day: entry.day,
+    players,
+  };
 }
 
 /**
