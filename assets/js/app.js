@@ -9,12 +9,15 @@
  *   4. Keeping every function small, documented, and easy to tweak.
  */
 
+// Preferred modern source: a CSV manifest that maps each JSON payload to the
+// remote fetch URL. The first column is the filename (also used as the day tag)
+// and the second column is the full URL to fetch. Keeping this value configurable
+// via a constant makes future migrations straightforward.
+const DATA_LINKS_CSV = 'data/json_links.csv';
 // We previously served every day in a single JSON file, but that forced us to
 // ship a very large payload even when only a handful of records changed. The
-// dashboard now looks for a series of chunked files that follow the pattern
-// `data_stats1.json`, `data_stats2.json`, … inside the `data/` directory. Each
-// chunk contains a `day_stats` array, and we stitch every chunk together at
-// runtime so the rest of the rendering logic can stay exactly the same.
+// dashboard still supports the chunked pattern as a fallback, so historical
+// exports work unchanged when the CSV manifest is missing or empty.
 const DATA_FILE_SUFFIX = '.json';
 // Some editors name the chunked payloads `data_statsN.json`, while others use
 // the slightly different `day_statsN.json` scheme. Supporting both avoids
@@ -189,6 +192,97 @@ async function loadStats() {
  * legacy deployments keep functioning without manual migration.
  */
 async function loadAllStatsChunks() {
+  // We now prefer the CSV manifest because it allows arbitrary filenames and
+  // remote URLs while keeping the fetch list compact. Should the manifest be
+  // missing or malformed, we gracefully fall back to the chunked approach so
+  // existing deployments keep functioning.
+  const aggregated = [];
+
+  try {
+    const csvBasedStats = await loadStatsFromCsv();
+    aggregated.push(...csvBasedStats);
+
+    if (csvBasedStats.length > 0) {
+      // The manifest delivered at least one dataset, so we can skip the
+      // fallback paths entirely.
+      return aggregated;
+    }
+  } catch (csvError) {
+    // Logging to the console provides visibility when the CSV cannot be read,
+    // but we intentionally keep going so the chunked files still have a chance
+    // to satisfy the request.
+    console.warn(csvError);
+  }
+
+  const chunkedStats = await loadChunkedStats();
+  aggregated.push(...chunkedStats);
+  return aggregated;
+}
+
+/**
+ * Load day stats from the CSV manifest. Each row is expected to follow the
+ * `filename,url` pattern, with the filename doubling as the day identifier.
+ */
+async function loadStatsFromCsv() {
+  // Fetch the manifest once. A 404 simply means the publisher opted for the
+  // legacy layout, so we treat it as an empty list rather than a hard failure.
+  const response = await fetch(DATA_LINKS_CSV, { cache: 'no-cache' });
+  if (response.status === 404) {
+    return [];
+  }
+  if (!response.ok) {
+    throw new Error(`Failed to load CSV manifest (${response.status})`);
+  }
+
+  const csvText = await response.text();
+  // Quick sanity check to avoid doing unnecessary work on an empty file.
+  if (!csvText.trim()) {
+    return [];
+  }
+
+  // Split the manifest into lines and ignore the header. We purposely avoid a
+  // CSV parser dependency to keep the bundle lean; the simple format makes
+  // manual parsing reliable enough here.
+  const [, ...rows] = csvText.split(/\r?\n/).filter((line) => Boolean(line.trim()));
+
+  const entries = rows
+    .map((line) => line.split(','))
+    .map(([filename, url]) => ({ filename: filename?.trim(), url: url?.trim() }))
+    .filter((entry) => entry.filename && entry.url);
+
+  if (!entries.length) {
+    return [];
+  }
+
+  // Kick off every fetch in parallel to minimize waiting time, then transform
+  // the payloads into the normalized shape the rest of the UI expects.
+  const stats = await Promise.all(
+    entries.map(async (entry) => {
+      const tag = parseDayFromFilename(entry.filename);
+
+      const responseForEntry = await fetch(entry.url, { cache: 'no-cache' });
+      if (!responseForEntry.ok) {
+        throw new Error(`Failed to load ${entry.url} (${responseForEntry.status})`);
+      }
+
+      const payload = await responseForEntry.json();
+      if (!payload || !Array.isArray(payload.players)) {
+        throw new Error(`Unexpected data format in ${entry.url}`);
+      }
+
+      return { day: tag, players: payload.players };
+    }),
+  );
+
+  // Filter out any nullish results just in case a future change returns empty
+  // slots, ensuring the callers always receive a clean array of day objects.
+  return stats.filter(Boolean);
+}
+
+/**
+ * Fallback loader that preserves the original chunked naming conventions.
+ */
+async function loadChunkedStats() {
   const aggregated = [];
   let filesFound = 0;
 
@@ -268,6 +362,29 @@ async function loadAllStatsChunks() {
   }
 
   return aggregated;
+}
+
+/**
+ * Extract the day identifier from the filename used in the CSV manifest. The
+ * number before the `.json` extension doubles as the day tag, keeping the
+ * format flexible while still sortable.
+ */
+function parseDayFromFilename(filename) {
+  // Guard against unexpected nullish values and trim stray whitespace to avoid
+  // subtle mismatches when the manifest uses extra spaces.
+  const safeName = (filename || '').trim();
+  if (!safeName) return safeName;
+
+  // Remove the trailing extension when present so we can parse the numeric
+  // portion directly (e.g. "2.json" -> "2").
+  const withoutExtension = safeName.toLowerCase().endsWith(DATA_FILE_SUFFIX)
+    ? safeName.slice(0, -DATA_FILE_SUFFIX.length)
+    : safeName;
+
+  const numericDay = Number.parseInt(withoutExtension, 10);
+  // Prefer the numeric value for sorting, but fall back to the raw string so we
+  // never drop a dataset because its tag is non-numeric.
+  return Number.isFinite(numericDay) ? numericDay : withoutExtension;
 }
 
 /**
