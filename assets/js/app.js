@@ -9,23 +9,17 @@
  *   4. Keeping every function small, documented, and easy to tweak.
  */
 
-// We previously served every day in a single JSON file, but that forced us to
-// ship a very large payload even when only a handful of records changed. The
-// dashboard now looks for a series of chunked files that follow the pattern
-// `data_stats1.json`, `data_stats2.json`, … inside the `data/` directory. Each
-// chunk contains a `day_stats` array, and we stitch every chunk together at
-// runtime so the rest of the rendering logic can stay exactly the same.
-const DATA_FILE_SUFFIX = '.json';
-// Some editors name the chunked payloads `data_statsN.json`, while others use
-// the slightly different `day_statsN.json` scheme. Supporting both avoids
-// forcing the content team to rename historical exports when a typo slips in.
-const DATA_FILE_PREFIXES = ['data/data_stats', 'data/day_stats'];
-// Guard rail so a misconfigured server cannot trap us in an endless loop if it
-// keeps returning successful responses for every index.
-const MAX_DATA_FILES = 50;
-// Backwards compatibility: if no chunked files exist we still attempt to read
-// the legacy single-file endpoint so older datasets continue to work.
-const LEGACY_DATA_URL = 'data/day_stats.json';
+// Data is now described by a lightweight CSV manifest instead of multiple JSON
+// files in the `data/` directory. The CSV lives in the repository next to the
+// legacy JSON files so the hosting setup stays untouched, but the fetch logic
+// now reads the manifest first and then requests the referenced JSON files in
+// parallel. This keeps the page resilient to future reshuffles while allowing
+// the publisher to swap out URLs without code changes.
+const DATA_LINKS_CSV = 'data/json_links.csv';
+// Limiting concurrency protects the page from spawning dozens of simultaneous
+// network requests if the manifest ever grows. Ten parallel requests strike a
+// balance between speed and politeness toward the CDN.
+const MAX_PARALLEL_JSON_REQUESTS = 10;
 
 // --- DOM lookups ---------------------------------------------------------------------------
 
@@ -157,10 +151,10 @@ setPlayerControlsDisabled(true);
 async function loadStats() {
   setOpenStatsLoading(true);
   try {
-    // Pull every chunked file we can find and flatten the resulting lists. The
-    // helper takes care of falling back to the legacy single JSON file when no
-    // chunked files are present.
-    const combinedStats = await loadAllStatsChunks();
+    // Pull the manifest-driven dataset. The helper shields the rest of the
+    // file from knowing how data is distributed across remote URLs by returning
+    // a single, flattened list of day objects.
+    const combinedStats = await loadStatsFromManifest();
 
     if (!combinedStats.length) {
       throw new Error('No day stats available');
@@ -179,95 +173,92 @@ async function loadStats() {
 }
 
 /**
- * Load every stats chunk following the `data_statsN.json` naming convention.
+ * Load day stats via the CSV manifest living in `data/json_links.csv`.
  *
- * The user now has the freedom to split the dataset into arbitrarily sized
- * files (for example, six days in `data_stats1.json` and seven in
- * `data_stats2.json`). We iterate over indexes starting at 1 and stop as soon
- * as we hit a 404, which indicates the sequence ended. The helper also falls
- * back to the historical `day_stats.json` file when no chunked files exist so
- * legacy deployments keep functioning without manual migration.
+ * The CSV contains two columns: the JSON filename (e.g. `2.json`) and the
+ * absolute URL where that JSON can be fetched. The filename doubles as the day
+ * identifier, which keeps remote files small because they no longer need to
+ * embed their own metadata. The helper fetches the manifest, validates every
+ * entry, and then retrieves the JSON files in controlled parallel batches.
  */
-async function loadAllStatsChunks() {
-  const aggregated = [];
-  let filesFound = 0;
-
-  for (let index = 1; index <= MAX_DATA_FILES; index += 1) {
-    // Keep track of whether any of the prefix variations produced a valid file
-    // for the current index. We only stop scanning when every option returns a
-    // 404, which means the publisher has no more chunks for us to consume.
-    let chunkLoadedForIndex = false;
-
-    for (const prefix of DATA_FILE_PREFIXES) {
-      // Build the absolute URL using the candidate prefix. The prefixes already
-      // include the directory, so here we only attach the incrementing number
-      // and the common suffix.
-      const url = `${prefix}${index}${DATA_FILE_SUFFIX}`;
-
-      let response;
-      try {
-        response = await fetch(url, { cache: 'no-cache' });
-      } catch (networkError) {
-        // This is a hard failure (e.g. offline or CORS), so retrying a
-        // different prefix would not magically fix the issue. Bubble the error
-        // up to the caller so we can show a helpful message to the viewer.
-        throw new Error(`Network error while loading ${url}`);
-      }
-
-      if (response.status === 404) {
-        // A 404 simply means the current prefix does not exist for this index.
-        // We try the next prefix before deciding whether the sequence ended.
-        continue;
-      }
-
-      if (!response.ok) {
-        // Any other status code (500s, 403s, etc.) should be surfaced to the
-        // maintainer so they can investigate the backend configuration.
-        throw new Error(`Failed to load ${url} (${response.status})`);
-      }
-
-      const payload = await response.json();
-      if (!payload || !Array.isArray(payload.day_stats)) {
-        // When a file exists but its structure changed unexpectedly we also
-        // abort early, as rendering bogus data would be misleading.
-        throw new Error(`Unexpected data format in ${url}`);
-      }
-
-      aggregated.push(...payload.day_stats);
-      filesFound += 1;
-      chunkLoadedForIndex = true;
-
-      // Once one prefix yielded a proper payload we stop checking further
-      // prefixes for the same index to avoid duplicating data.
-      break;
-    }
-
-    if (!chunkLoadedForIndex) {
-      // Every prefix produced a 404 for this index, which indicates the
-      // sequence of chunked files ended. Breaking keeps the loop tight even if
-      // the author accidentally leaves extra gaps at the end.
-      break;
-    }
+async function loadStatsFromManifest() {
+  const manifestResponse = await fetch(DATA_LINKS_CSV, { cache: 'no-cache' });
+  if (!manifestResponse.ok) {
+    throw new Error(`Failed to load manifest (${manifestResponse.status})`);
   }
 
-  // If the loop never found a chunked file we revert to the legacy single
-  // endpoint. This keeps older datasets functional and gives the editor time to
-  // migrate gradually.
-  if (filesFound === 0) {
-    const legacyResponse = await fetch(LEGACY_DATA_URL, { cache: 'no-cache' });
-    if (!legacyResponse.ok) {
-      throw new Error(`Failed to load stats (${legacyResponse.status})`);
-    }
+  const manifestText = await manifestResponse.text();
+  const entries = parseManifest(manifestText);
 
-    const legacyPayload = await legacyResponse.json();
-    if (!legacyPayload || !Array.isArray(legacyPayload.day_stats)) {
-      throw new Error('Unexpected data format');
-    }
+  if (!entries.length) {
+    throw new Error('No JSON links available');
+  }
 
-    aggregated.push(...legacyPayload.day_stats);
+  // Process JSON fetches in batches to avoid exhausting the browser's request
+  // pipeline. Each iteration pulls up to `MAX_PARALLEL_JSON_REQUESTS` entries
+  // and waits for them before continuing, which keeps memory usage predictable
+  // even on very large manifests.
+  const aggregated = [];
+  for (let start = 0; start < entries.length; start += MAX_PARALLEL_JSON_REQUESTS) {
+    const slice = entries.slice(start, start + MAX_PARALLEL_JSON_REQUESTS);
+    const slicePromises = slice.map((entry) => loadDayFromEntry(entry));
+    const sliceResults = await Promise.all(slicePromises);
+    sliceResults.forEach((result) => {
+      if (result) {
+        aggregated.push(result);
+      }
+    });
   }
 
   return aggregated;
+}
+
+/**
+ * Convert the CSV manifest into an array of { filename, url } entries.
+ */
+function parseManifest(manifestText) {
+  // Trim whitespace to tolerate trailing newlines in the uploaded manifest.
+  const rows = manifestText.trim().split(/\r?\n/);
+  // Drop the header row and ignore any blank lines that may be present.
+  return rows
+    .slice(1)
+    .map((row) => row.trim())
+    .filter(Boolean)
+    .map((row) => {
+      const [filename, url] = row.split(',');
+      return { filename: filename?.trim(), url: url?.trim() };
+    })
+    .filter((entry) => entry.filename && entry.url);
+}
+
+/**
+ * Fetch a single day's JSON using the metadata from the manifest entry.
+ */
+async function loadDayFromEntry(entry) {
+  const dayId = entry.filename.replace('.json', '');
+  const dayNumber = Number(dayId);
+
+  if (Number.isNaN(dayNumber)) {
+    // Surfacing invalid rows early keeps debugging straightforward for content
+    // editors who may accidentally mistype filenames in the manifest.
+    console.warn(`Skipping manifest entry with non-numeric day: ${entry.filename}`);
+    return null;
+  }
+
+  const response = await fetch(entry.url, { cache: 'no-cache' });
+  if (!response.ok) {
+    throw new Error(`Failed to load ${entry.url} (${response.status})`);
+  }
+
+  const payload = await response.json();
+  if (!payload || !Array.isArray(payload.players)) {
+    // Older exports bundled the day metadata inside `day_stats`; the new format
+    // only needs a players array because the manifest already tells us which
+    // calendar day the file belongs to.
+    throw new Error(`Unexpected data format in ${entry.filename}`);
+  }
+
+  return { day: dayNumber, players: payload.players };
 }
 
 /**
