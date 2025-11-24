@@ -1,4 +1,11 @@
-const DATA_URL = 'data/day_stats.json';
+// Endpoint for the winner-only feed that drives the Open Stats tiles.
+const WINNER_URL = 'data/winner.json';
+// Remote CSV that lists every available player handle for searching.
+const PLAYER_LIST_URL = 'https://ball-crusher.github.io/Website/data/liste.csv';
+// Remote CSV that maps every SQLite shard filename to its download URL.
+const SQLITE_LINKS_URL = 'https://ball-crusher.github.io/Website/data/players_sqlite_links.csv';
+// Every shard contains 7,000 sequential players in the index list.
+const PLAYERS_PER_SHARD = 7000;
 
 const root = document.documentElement;
 const openStatsGrid = document.getElementById('open-stats-grid');
@@ -9,11 +16,13 @@ const sortFieldSelect = document.getElementById('sort-field');
 const sortOrderSelect = document.getElementById('sort-order');
 const canvas = document.getElementById('statsCanvas');
 
-let playerIndex = new Map();
+let playerNames = [];
+let sqliteLinks = new Map();
 let currentPlayer = null;
 let winnerTimeline = [];
 let canvasAnimationId = null;
 let canvasResizeHandler = null;
+let sqlJsPromise = null;
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -49,15 +58,20 @@ window.addEventListener('orientationchange', () => {
 
 async function loadStats() {
   try {
-    const response = await fetch(DATA_URL, { cache: 'no-cache' });
-    if (!response.ok) {
-      throw new Error(`Failed to load stats (${response.status})`);
+    const [winnerData, listCsv, linksCsv] = await Promise.all([
+      fetchJson(WINNER_URL, 'winner stats'),
+      fetchTextWithFallback(PLAYER_LIST_URL, 'player list'),
+      fetchTextWithFallback(SQLITE_LINKS_URL, 'SQLite links'),
+    ]);
+
+    if (!winnerData || !Array.isArray(winnerData.day_stats)) {
+      throw new Error('Unexpected winner data format');
     }
-    const data = await response.json();
-    if (!data || !Array.isArray(data.day_stats)) {
-      throw new Error('Unexpected data format');
-    }
-    initialize(data.day_stats);
+
+    initializeOpenStats(winnerData.day_stats);
+    ingestPlayerNames(listCsv);
+    ingestSqliteLinks(linksCsv);
+    populatePlayerSuggestions();
   } catch (error) {
     console.error(error);
     openStatsGrid.innerHTML = `<p class="no-results">${error.message}. Check the JSON endpoint.</p>`;
@@ -65,28 +79,25 @@ async function loadStats() {
   }
 }
 
-function initialize(dayStats) {
+function initializeOpenStats(dayStats) {
   const sortedDays = [...dayStats].sort((a, b) => b.day - a.day);
   winnerTimeline = buildWinnerTimeline(sortedDays);
   renderOpenStats(sortedDays);
-  buildPlayerIndex(sortedDays);
-  populatePlayerSuggestions();
   startCanvasAnimation();
 }
 
 function buildWinnerTimeline(days) {
   return days
     .map((day) => {
-      const winner = [...day.players].sort((a, b) => a.rank - b.rank)[0];
-      if (!winner) return null;
+      if (!day || typeof day !== 'object') return null;
       return {
         day: day.day,
-        name: winner.name,
-        time: winner.time,
-        seconds: parseTimeToSeconds(winner.time),
+        name: day.name,
+        time: day.time,
+        seconds: parseTimeToSeconds(day.time),
       };
     })
-    .filter(Boolean)
+    .filter((entry) => entry && Number.isFinite(entry.day))
     .sort((a, b) => a.day - b.day);
 }
 
@@ -111,12 +122,11 @@ function renderOpenStats(days) {
 
     const winnerInfo = document.createElement('div');
     winnerInfo.className = 'winner';
-    const topPlayer = [...day.players].sort((a, b) => a.rank - b.rank)[0];
     const winnerLink = document.createElement('a');
-    winnerLink.href = buildInstagramLink(topPlayer?.name);
+    winnerLink.href = buildInstagramLink(day?.name);
     winnerLink.target = '_blank';
     winnerLink.rel = 'noopener noreferrer';
-    winnerLink.textContent = topPlayer ? topPlayer.name : '—';
+    winnerLink.textContent = day?.name || '—';
 
     const winnerLabel = document.createElement('span');
     winnerLabel.textContent = 'Daily winner';
@@ -140,24 +150,23 @@ function renderOpenStats(days) {
     const list = document.createElement('ul');
     list.className = 'player-list';
 
-    [...day.players]
-      .sort((a, b) => a.rank - b.rank)
-      .forEach((player) => {
-        const item = document.createElement('li');
+    const winnerItem = document.createElement('li');
+    winnerItem.className = 'player-name';
+    winnerItem.innerHTML = `<strong>Winner</strong> &nbsp; <a href="${buildInstagramLink(day?.name)}" target="_blank" rel="noopener noreferrer">${day?.name || '—'}</a>`;
 
-        const left = document.createElement('div');
-        left.className = 'player-name';
-        left.innerHTML = `<strong>${ordinal(player.rank)}</strong> &nbsp; <a href="${buildInstagramLink(
-          player.name
-        )}" target="_blank" rel="noopener noreferrer">${player.name}</a>`;
+    const timeItem = document.createElement('li');
+    timeItem.className = 'player-time';
+    timeItem.textContent = `Time: ${day?.time || 'n/a'}`;
 
-        const right = document.createElement('span');
-        right.className = 'player-time';
-        right.textContent = `Time: ${player.time}`;
+    const participantItem = document.createElement('li');
+    participantItem.className = 'player-time';
+    participantItem.textContent = `Participants: ${Number.isFinite(day?.players) ? day.players : 'n/a'}`;
 
-        item.append(left, right);
-        list.append(item);
-      });
+    const noticeItem = document.createElement('li');
+    noticeItem.className = 'player-time';
+    noticeItem.textContent = 'Full leaderboard data is no longer available for this day.';
+
+    list.append(winnerItem, timeItem, participantItem, noticeItem);
 
     collapse.append(list);
 
@@ -190,76 +199,22 @@ function renderOpenStats(days) {
     card.append(header, collapse);
     openStatsGrid.append(card);
   });
-}
 
-function buildPlayerIndex(days) {
-  playerIndex = new Map();
-
-  days.forEach((day) => {
-    day.players.forEach((player) => {
-      const key = player.name.trim().toLowerCase();
-      if (!playerIndex.has(key)) {
-        playerIndex.set(key, {
-          name: player.name,
-          records: [],
-        });
-      }
-      const entry = playerIndex.get(key);
-      entry.records.push({
-        day: day.day,
-        rank: player.rank,
-        time: player.time,
-        seconds: parseTimeToSeconds(player.time),
-      });
-    });
-  });
+  // Explicitly return to make the boundary of the renderer obvious while reading.
+  return openStatsGrid;
 }
 
 function populatePlayerSuggestions() {
   playerSuggestions.innerHTML = '';
-  const sortedPlayers = Array.from(playerIndex.values())
-    .map((entry) => entry.name)
-    .sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' }));
+
+  // Suggestions now come from the remote CSV so users can search anyone in the dataset.
+  const sortedPlayers = [...playerNames].sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' }));
 
   sortedPlayers.forEach((name) => {
     const option = document.createElement('option');
     option.value = name;
     playerSuggestions.append(option);
   });
-}
-
-function updatePlayerResults(options = {}) {
-  const { silentOnNoMatch = false } = options;
-  const query = playerSearchInput.value.trim();
-  if (!query) {
-    currentPlayer = null;
-    playerResultsContainer.innerHTML = '<p class="no-results">Search for a player to see results.</p>';
-    return;
-  }
-
-  const normalized = query.toLowerCase();
-  let entry = playerIndex.get(normalized);
-
-  if (!entry && normalized.length >= 2) {
-    const partialMatches = Array.from(playerIndex.entries())
-      .map(([key, value]) => ({ key, value }))
-      .filter(({ key, value }) => value.name.toLowerCase().includes(normalized));
-
-    if (partialMatches.length === 1) {
-      entry = partialMatches[0].value;
-    }
-  }
-
-  if (!entry) {
-    currentPlayer = null;
-    if (!silentOnNoMatch) {
-      playerResultsContainer.innerHTML = `<p class="no-results">No results for "${query}".</p>`;
-    }
-    return;
-  }
-
-  currentPlayer = entry;
-  renderPlayerResults(entry);
 }
 
 function renderPlayerResults(entry) {
@@ -304,6 +259,239 @@ function renderPlayerResults(entry) {
 
   if (!sortedRecords.length) {
     playerResultsContainer.innerHTML = '<p class="no-results">No stats available.</p>';
+  }
+}
+
+function updatePlayerResults() {
+  const query = playerSearchInput.value.trim();
+  if (!query) {
+    currentPlayer = null;
+    playerResultsContainer.innerHTML = '<p class="no-results">Search for a player to see results.</p>';
+    return;
+  }
+
+  playerResultsContainer.innerHTML = '<p class="no-results">Loading player data…</p>';
+
+  lookupPlayer(query)
+    .then((entry) => {
+      if (!entry) {
+        playerResultsContainer.innerHTML = `<p class="no-results">No results for "${query}".</p>`;
+        return;
+      }
+      currentPlayer = entry;
+      renderPlayerResults(entry);
+    })
+    .catch((error) => {
+      console.error(error);
+      playerResultsContainer.innerHTML = `<p class="no-results">${error.message}</p>`;
+    });
+}
+
+async function lookupPlayer(query) {
+  const normalized = query.trim().toLowerCase();
+
+  if (!playerNames.length) {
+    throw new Error('Player list is not available.');
+  }
+
+  // We match by full name to avoid downloading unnecessary shards.
+  const playerIndexPosition = playerNames.findIndex((name) => name.toLowerCase() === normalized);
+  if (playerIndexPosition === -1) {
+    return null;
+  }
+
+  const shardNumber = determineShardNumber(playerIndexPosition);
+  const shardOrder = buildShardSearchOrder(shardNumber);
+
+  for (const shardId of shardOrder) {
+    const shardUrl = sqliteLinks.get(`players_${shardId}.sqlite`);
+    if (!shardUrl) {
+      continue;
+    }
+
+    const record = await fetchPlayerFromShard(shardUrl, normalized);
+    if (record) {
+      return record;
+    }
+  }
+
+  return null;
+}
+
+function determineShardNumber(playerIndexPosition) {
+  // The API expects the raw entry position divided by 7,000 and floored.
+  const baseShard = Math.max(1, Math.floor(playerIndexPosition / PLAYERS_PER_SHARD));
+  const maxShard = computeMaxShardNumber();
+  return clamp(baseShard, 1, maxShard);
+}
+
+function computeMaxShardNumber() {
+  if (!sqliteLinks.size) {
+    return 1;
+  }
+
+  // Filenames follow players_X.sqlite, so we extract X and pick the largest.
+  return Math.max(
+    ...Array.from(sqliteLinks.keys())
+      .map((key) => Number(key.replace(/[^0-9]/g, '')))
+      .filter((num) => Number.isFinite(num))
+  );
+}
+
+function buildShardSearchOrder(baseShard) {
+  const maxShard = computeMaxShardNumber();
+  const order = [];
+
+  for (let offset = 0; offset <= maxShard; offset += 1) {
+    const forward = baseShard + offset;
+    const backward = baseShard - offset;
+
+    if (offset === 0) {
+      order.push(baseShard);
+      continue;
+    }
+
+    if (forward <= maxShard) {
+      order.push(forward);
+    }
+
+    if (backward >= 1) {
+      order.push(backward);
+    }
+  }
+
+  // Deduplicate while preserving order.
+  return Array.from(new Set(order));
+}
+
+async function fetchPlayerFromShard(shardUrl, normalizedName) {
+  const sql = await loadSqlJs();
+
+  const response = await fetch(shardUrl, { cache: 'no-cache' });
+  if (!response.ok) {
+    throw new Error(`Failed to load ${shardUrl}`);
+  }
+
+  const buffer = await response.arrayBuffer();
+  const database = new sql.Database(new Uint8Array(buffer));
+
+  // Prepared statement keeps us efficient even when shards grow.
+  const statement = database.prepare('SELECT username, data FROM players WHERE LOWER(username) = ?');
+  statement.bind([normalizedName]);
+
+  let result = null;
+  while (statement.step()) {
+    const row = statement.getAsObject();
+    let parsed = [];
+
+    // Defensive JSON parsing protects the UI from malformed payloads.
+    try {
+      const asJson = JSON.parse(row.data || '[]');
+      parsed = Array.isArray(asJson) ? asJson : [];
+    } catch (error) {
+      console.warn('Unable to parse JSON payload for', row.username, error);
+    }
+
+    result = {
+      name: row.username,
+      records: parsed.map((entry) => ({
+        day: entry.day,
+        rank: entry.rank,
+        time: entry.time,
+        seconds: parseTimeToSeconds(entry.time),
+      })),
+    };
+  }
+
+  statement.free();
+  database.close();
+  return result;
+}
+
+async function loadSqlJs() {
+  if (sqlJsPromise) return sqlJsPromise;
+
+  // SQL.js ships a helper called initSqlJs via a script loader, so we attach it only once.
+  sqlJsPromise = new Promise((resolve, reject) => {
+    const startInitialization = () => {
+      if (typeof window.initSqlJs !== 'function') {
+        reject(new Error('SQL.js could not be initialized.'));
+        return;
+      }
+
+      window
+        .initSqlJs({ locateFile: (file) => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.2/${file}` })
+        .then(resolve)
+        .catch((error) => reject(error));
+    };
+
+    if (typeof window.initSqlJs === 'function') {
+      startInitialization();
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.2/sql-wasm.js';
+    script.async = true;
+    script.onload = startInitialization;
+    script.onerror = () => reject(new Error('Failed to load SQL.js library.'));
+
+    document.head.append(script);
+  });
+
+  return sqlJsPromise;
+}
+
+function ingestPlayerNames(csvText) {
+  if (typeof csvText !== 'string') return;
+
+  // Entries may contain a BOM or empty lines; we trim aggressively to stay resilient.
+  playerNames = csvText
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\ufeff/, '').trim())
+    .filter(Boolean);
+}
+
+function ingestSqliteLinks(csvText) {
+  sqliteLinks.clear();
+
+  if (typeof csvText !== 'string') return;
+
+  csvText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.toLowerCase().startsWith('filename'))
+    .forEach((line) => {
+      const [filename, url] = line.split(',');
+      if (filename && url) {
+        sqliteLinks.set(filename.trim(), url.trim());
+      }
+    });
+}
+
+async function fetchJson(url, label) {
+  const response = await fetch(url, { cache: 'no-cache' });
+  if (!response.ok) {
+    throw new Error(`Failed to load ${label} (${response.status})`);
+  }
+  return response.json();
+}
+
+async function fetchTextWithFallback(url, label) {
+  try {
+    const response = await fetch(url, { cache: 'no-cache' });
+    if (!response.ok) {
+      throw new Error();
+    }
+    return response.text();
+  } catch (error) {
+    // Local fallback keeps the site functional if the CDN is unreachable.
+    const localUrl = url.replace('https://ball-crusher.github.io/Website/', '');
+    const response = await fetch(localUrl, { cache: 'no-cache' });
+    if (!response.ok) {
+      throw new Error(`Failed to load ${label}.`);
+    }
+    return response.text();
   }
 }
 
@@ -496,10 +684,10 @@ playerSearchInput.addEventListener('input', () => {
   }
 
   const normalized = playerSearchInput.value.trim().toLowerCase();
-  if (playerIndex.has(normalized)) {
+
+  // Avoid hammering the shards until the user finishes typing an exact handle.
+  if (playerNames.some((name) => name.toLowerCase() === normalized)) {
     updatePlayerResults();
-  } else {
-    updatePlayerResults({ silentOnNoMatch: true });
   }
 });
 sortFieldSelect.addEventListener('change', () => currentPlayer && renderPlayerResults(currentPlayer));
