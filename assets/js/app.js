@@ -1,4 +1,11 @@
-const DATA_URL = 'data/day_stats.json';
+// Quelle für die Gewinner-Karten der "Open Stats" Sektion.
+const WINNER_DATA_URL = 'data/winner.json';
+// URL mit allen Spielernamen, damit die Suche nicht erst eine Datenbank laden muss.
+const PLAYER_LIST_URL = 'https://ball-crusher.github.io/Website/data/liste.csv';
+// URL mit den Download-Links zu den SQLite-Split-Dateien.
+const SQLITE_LINKS_URL = 'https://ball-crusher.github.io/Website/data/players_sqlite_links.csv';
+// Anzahl der Namen pro Chunk, wie vom neuen Datenkonzept beschrieben.
+const PLAYER_CHUNK_SIZE = 7000;
 
 const root = document.documentElement;
 const openStatsGrid = document.getElementById('open-stats-grid');
@@ -9,11 +16,16 @@ const sortFieldSelect = document.getElementById('sort-field');
 const sortOrderSelect = document.getElementById('sort-order');
 const canvas = document.getElementById('statsCanvas');
 
-let playerIndex = new Map();
+// Liste aller bekannten Spieler (aus der entfernten CSV).
+let playerNames = [];
+// Map von Dateiname -> Download-URL für die SQLite-Chunks.
+let sqliteLinks = new Map();
+// Gehaltener Spieler, der aktuell angezeigt wird.
 let currentPlayer = null;
 let winnerTimeline = [];
 let canvasAnimationId = null;
 let canvasResizeHandler = null;
+let sqlJsPromise = null;
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -49,15 +61,22 @@ window.addEventListener('orientationchange', () => {
 
 async function loadStats() {
   try {
-    const response = await fetch(DATA_URL, { cache: 'no-cache' });
-    if (!response.ok) {
-      throw new Error(`Failed to load stats (${response.status})`);
-    }
-    const data = await response.json();
-    if (!data || !Array.isArray(data.day_stats)) {
+    // Wir laden den Gewinner-Feed und die Spieler-Rohdaten parallel, weil beides für die Seite nötig ist.
+    const [winnerResponse, names, linkMap] = await Promise.all([
+      fetchJson(WINNER_DATA_URL),
+      loadPlayerNames(),
+      loadSqliteLinks(),
+    ]);
+
+    if (!winnerResponse || !Array.isArray(winnerResponse.day_stats)) {
       throw new Error('Unexpected data format');
     }
-    initialize(data.day_stats);
+
+    playerNames = names;
+    sqliteLinks = linkMap;
+
+    initialize(winnerResponse.day_stats);
+    populatePlayerSuggestions();
   } catch (error) {
     console.error(error);
     openStatsGrid.innerHTML = `<p class="no-results">${error.message}. Check the JSON endpoint.</p>`;
@@ -66,27 +85,23 @@ async function loadStats() {
 }
 
 function initialize(dayStats) {
+  // Gewinner werden nach Tag sortiert, damit Timeline und Karten konsistent sind.
   const sortedDays = [...dayStats].sort((a, b) => b.day - a.day);
   winnerTimeline = buildWinnerTimeline(sortedDays);
   renderOpenStats(sortedDays);
-  buildPlayerIndex(sortedDays);
-  populatePlayerSuggestions();
   startCanvasAnimation();
 }
 
 function buildWinnerTimeline(days) {
+  // Das Timeline-Array muss nur Siegerinformationen kennen.
   return days
-    .map((day) => {
-      const winner = [...day.players].sort((a, b) => a.rank - b.rank)[0];
-      if (!winner) return null;
-      return {
-        day: day.day,
-        name: winner.name,
-        time: winner.time,
-        seconds: parseTimeToSeconds(winner.time),
-      };
-    })
-    .filter(Boolean)
+    .map((day) => ({
+      day: day.day,
+      name: day.name,
+      time: day.time,
+      seconds: parseTimeToSeconds(day.time),
+    }))
+    .filter((entry) => entry.name)
     .sort((a, b) => a.day - b.day);
 }
 
@@ -111,124 +126,44 @@ function renderOpenStats(days) {
 
     const winnerInfo = document.createElement('div');
     winnerInfo.className = 'winner';
-    const topPlayer = [...day.players].sort((a, b) => a.rank - b.rank)[0];
     const winnerLink = document.createElement('a');
-    winnerLink.href = buildInstagramLink(topPlayer?.name);
+    winnerLink.href = buildInstagramLink(day.name);
     winnerLink.target = '_blank';
     winnerLink.rel = 'noopener noreferrer';
-    winnerLink.textContent = topPlayer ? topPlayer.name : '—';
+    winnerLink.textContent = day.name || '—';
 
     const winnerLabel = document.createElement('span');
     winnerLabel.textContent = 'Daily winner';
     winnerInfo.append(winnerLink, winnerLabel);
 
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'details-button';
-    button.textContent = 'More details';
-    button.setAttribute('aria-expanded', 'false');
+    const timeLabel = document.createElement('div');
+    timeLabel.className = 'player-time';
+    timeLabel.textContent = `Time: ${day.time || '—'}`;
 
-    header.append(label, winnerInfo, button);
+    const playerCount = document.createElement('div');
+    playerCount.className = 'player-time';
+    playerCount.textContent = `Participants: ${day.players ?? '—'}`;
 
-    const collapse = document.createElement('div');
-    collapse.className = 'collapse';
-    const collapseId = `day-${day.day}-details`;
-    collapse.id = collapseId;
-    collapse.hidden = true;
-    button.setAttribute('aria-controls', collapseId);
-
-    const list = document.createElement('ul');
-    list.className = 'player-list';
-
-    [...day.players]
-      .sort((a, b) => a.rank - b.rank)
-      .forEach((player) => {
-        const item = document.createElement('li');
-
-        const left = document.createElement('div');
-        left.className = 'player-name';
-        left.innerHTML = `<strong>${ordinal(player.rank)}</strong> &nbsp; <a href="${buildInstagramLink(
-          player.name
-        )}" target="_blank" rel="noopener noreferrer">${player.name}</a>`;
-
-        const right = document.createElement('span');
-        right.className = 'player-time';
-        right.textContent = `Time: ${player.time}`;
-
-        item.append(left, right);
-        list.append(item);
-      });
-
-    collapse.append(list);
-
-    button.addEventListener('click', () => {
-      const isOpen = collapse.classList.toggle('open');
-      collapse.hidden = !isOpen;
-      button.setAttribute('aria-expanded', String(isOpen));
-      button.textContent = isOpen ? 'Hide details' : 'More details';
-
-      if (isOpen) {
-        document.querySelectorAll('.collapse.open').forEach((openSection) => {
-          if (openSection === collapse) return;
-          openSection.classList.remove('open');
-          openSection.hidden = true;
-          const toggle = openSection.previousElementSibling?.querySelector?.('.details-button');
-          if (toggle) {
-            toggle.setAttribute('aria-expanded', 'false');
-            toggle.textContent = 'More details';
-          }
-        });
-
-        if (typeof collapse.scrollIntoView === 'function') {
-          requestAnimationFrame(() => {
-            collapse.scrollIntoView({ block: 'start', behavior: 'smooth' });
-          });
-        }
-      }
-    });
-
-    card.append(header, collapse);
+    header.append(label, winnerInfo, timeLabel, playerCount);
+    card.append(header);
     openStatsGrid.append(card);
   });
 }
 
-function buildPlayerIndex(days) {
-  playerIndex = new Map();
-
-  days.forEach((day) => {
-    day.players.forEach((player) => {
-      const key = player.name.trim().toLowerCase();
-      if (!playerIndex.has(key)) {
-        playerIndex.set(key, {
-          name: player.name,
-          records: [],
-        });
-      }
-      const entry = playerIndex.get(key);
-      entry.records.push({
-        day: day.day,
-        rank: player.rank,
-        time: player.time,
-        seconds: parseTimeToSeconds(player.time),
-      });
-    });
-  });
-}
-
 function populatePlayerSuggestions() {
+  // Die Vorschlagsliste kann riesig sein, darum begrenzen wir die Optionszahl für die UI-Leistung.
   playerSuggestions.innerHTML = '';
-  const sortedPlayers = Array.from(playerIndex.values())
-    .map((entry) => entry.name)
-    .sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' }));
+  const trimmed = playerNames.filter(Boolean);
+  const sortedPlayers = trimmed.sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' }));
 
-  sortedPlayers.forEach((name) => {
+  sortedPlayers.slice(0, 5000).forEach((name) => {
     const option = document.createElement('option');
     option.value = name;
     playerSuggestions.append(option);
   });
 }
 
-function updatePlayerResults(options = {}) {
+async function updatePlayerResults(options = {}) {
   const { silentOnNoMatch = false } = options;
   const query = playerSearchInput.value.trim();
   if (!query) {
@@ -237,29 +172,26 @@ function updatePlayerResults(options = {}) {
     return;
   }
 
-  const normalized = query.toLowerCase();
-  let entry = playerIndex.get(normalized);
+  // Zeige sofort einen Ladehinweis, da jetzt potenziell ein SQLite-Download folgt.
+  playerResultsContainer.innerHTML = '<p class="no-results">Loading player records…</p>';
 
-  if (!entry && normalized.length >= 2) {
-    const partialMatches = Array.from(playerIndex.entries())
-      .map(([key, value]) => ({ key, value }))
-      .filter(({ key, value }) => value.name.toLowerCase().includes(normalized));
+  try {
+    const entry = await fetchPlayerFromSqlite(query);
 
-    if (partialMatches.length === 1) {
-      entry = partialMatches[0].value;
+    if (!entry) {
+      currentPlayer = null;
+      if (!silentOnNoMatch) {
+        playerResultsContainer.innerHTML = `<p class="no-results">No results for "${query}".</p>`;
+      }
+      return;
     }
-  }
 
-  if (!entry) {
-    currentPlayer = null;
-    if (!silentOnNoMatch) {
-      playerResultsContainer.innerHTML = `<p class="no-results">No results for "${query}".</p>`;
-    }
-    return;
+    currentPlayer = entry;
+    renderPlayerResults(entry);
+  } catch (error) {
+    console.error(error);
+    playerResultsContainer.innerHTML = `<p class="no-results">${error.message}</p>`;
   }
-
-  currentPlayer = entry;
-  renderPlayerResults(entry);
 }
 
 function renderPlayerResults(entry) {
@@ -488,7 +420,174 @@ function buildInstagramLink(name) {
   return `https://instagram.com/${sanitized}`;
 }
 
-playerSearchInput.addEventListener('change', () => updatePlayerResults());
+async function fetchJson(url) {
+  // Hilfsfunktion für lesbaren Fetch-Code mit Cache-Bypass.
+  const response = await fetch(url, { cache: 'no-cache' });
+  if (!response.ok) {
+    throw new Error(`Failed to load ${url} (${response.status})`);
+  }
+  return response.json();
+}
+
+async function fetchText(url) {
+  // Gleiches Muster wie fetchJson, nur dass wir den Text brauchen (CSV).
+  const response = await fetch(url, { cache: 'no-cache' });
+  if (!response.ok) {
+    throw new Error(`Failed to load ${url} (${response.status})`);
+  }
+  return response.text();
+}
+
+async function loadPlayerNames() {
+  // Namen sind das Fundament für die Suche -> nur einmal laden und zwischenspeichern.
+  if (playerNames.length) return playerNames;
+  const csv = await fetchText(PLAYER_LIST_URL);
+  playerNames = csv
+    .split(/\r?\n/)
+    .map((name) => name.trim())
+    .filter(Boolean);
+  return playerNames;
+}
+
+async function loadSqliteLinks() {
+  // Mapping der Chunk-Dateien aus der zweiten CSV lesen und in eine Map legen.
+  if (sqliteLinks.size) return sqliteLinks;
+  const csv = await fetchText(SQLITE_LINKS_URL);
+  const lines = csv.split(/\r?\n/).filter(Boolean);
+  const map = new Map();
+
+  lines.slice(1).forEach((line) => {
+    const [filename, url] = line.split(',');
+    if (filename && url) {
+      map.set(filename.trim(), url.trim());
+    }
+  });
+
+  sqliteLinks = map;
+  return sqliteLinks;
+}
+
+async function getSqlJs() {
+  // sql.js lädt ein WASM-Modul, das wir über das CDN auflösen.
+  if (!sqlJsPromise) {
+    sqlJsPromise = import('https://cdn.jsdelivr.net/npm/sql.js@1.10.2/dist/sql-wasm.js').then((module) =>
+      module.default({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/sql.js@1.10.2/dist/${file}`,
+      })
+    );
+  }
+  return sqlJsPromise;
+}
+
+function buildChunkCandidates(baseChunk, availableChunks) {
+  // Wir suchen zuerst im berechneten Chunk und tasten uns dann +/- 1, 2, ... vor.
+  const candidates = [];
+  const maxOffset = Math.max(availableChunks.length, 5);
+
+  for (let offset = 0; offset <= maxOffset; offset += 1) {
+    const forward = baseChunk + offset;
+    const backward = baseChunk - offset;
+
+    if (forward >= 0 && !candidates.includes(forward)) {
+      candidates.push(forward);
+    }
+    if (backward >= 0 && !candidates.includes(backward)) {
+      candidates.push(backward);
+    }
+  }
+
+  return candidates;
+}
+
+function parsePlayerRow(row) {
+  // JSON-Array pro Spieler in ein normalisiertes Array überführen.
+  try {
+    const parsed = JSON.parse(row.data);
+    return Array.isArray(parsed)
+      ? parsed.map((entry) => ({
+          day: entry.day,
+          rank: entry.rank,
+          time: entry.time,
+          seconds: parseTimeToSeconds(entry.time),
+        }))
+      : [];
+  } catch (error) {
+    console.error('Failed to parse player JSON', error);
+    return [];
+  }
+}
+
+async function fetchPlayerFromSqlite(query) {
+  // Kernlogik: Namen lokalisieren, Chunk berechnen, SQLite laden, Datensatz auslesen.
+  const normalizedQuery = query.trim();
+  const lowerQuery = normalizedQuery.toLowerCase();
+
+  const names = playerNames.length ? playerNames : await loadPlayerNames();
+  const position = names.findIndex((name) => name.toLowerCase() === lowerQuery);
+  if (position === -1) {
+    return null;
+  }
+
+  // +1 weil die Zeilenposition menschlich gezählt wird (1 basiert).
+  const lineNumber = position + 1;
+  const baseChunk = Math.max(0, Math.floor(lineNumber / PLAYER_CHUNK_SIZE));
+  const linkMap = sqliteLinks.size ? sqliteLinks : await loadSqliteLinks();
+  const availableChunks = Array.from(linkMap.keys())
+    .map((filename) => Number(filename.replace(/\D+/g, '')))
+    .filter(Number.isFinite);
+
+  const SQL = await getSqlJs();
+  const candidates = buildChunkCandidates(baseChunk, availableChunks);
+
+  for (const chunk of candidates) {
+    const fileName = `players_${chunk}.sqlite`;
+    const url = linkMap.get(fileName);
+    if (!url) continue;
+
+    const result = await queryPlayerDatabase(url, lowerQuery, SQL);
+    if (result) {
+      return result;
+    }
+  }
+
+  return null;
+}
+
+async function queryPlayerDatabase(url, lowerQuery, SQL) {
+  // Lädt eine einzelne SQLite-Datei und versucht den gesuchten Spieler herauszufiltern.
+  const response = await fetch(url, { cache: 'no-cache' });
+  if (!response.ok) {
+    throw new Error(`Failed to load player chunk (${response.status})`);
+  }
+
+  const buffer = await response.arrayBuffer();
+  const db = new SQL.Database(new Uint8Array(buffer));
+
+  try {
+    const stmt = db.prepare('SELECT username, data FROM players WHERE lower(username) = ? LIMIT 1');
+    stmt.bind([lowerQuery]);
+
+    if (!stmt.step()) {
+      stmt.free();
+      return null;
+    }
+
+    const row = stmt.getAsObject();
+    stmt.free();
+
+    return {
+      name: row.username,
+      records: parsePlayerRow(row),
+    };
+  } finally {
+    db.close();
+  }
+}
+
+playerSearchInput.addEventListener('change', () => {
+  // change feuert bei Enter oder Verlassen des Feldes -> immer vollständig laden.
+  updatePlayerResults();
+});
 playerSearchInput.addEventListener('input', () => {
   if (!playerSearchInput.value) {
     updatePlayerResults();
@@ -496,9 +595,12 @@ playerSearchInput.addEventListener('input', () => {
   }
 
   const normalized = playerSearchInput.value.trim().toLowerCase();
-  if (playerIndex.has(normalized)) {
+  const hasExactName = playerNames.some((name) => name.toLowerCase() === normalized);
+
+  if (hasExactName) {
     updatePlayerResults();
   } else {
+    // Bei Tippfehlern oder Teilstrings zuerst schweigen, damit die UI nicht flackert.
     updatePlayerResults({ silentOnNoMatch: true });
   }
 });
