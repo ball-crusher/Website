@@ -15,6 +15,8 @@ const playerSuggestions = document.getElementById('player-suggestions');
 const sortFieldSelect = document.getElementById('sort-field');
 const sortOrderSelect = document.getElementById('sort-order');
 const canvas = document.getElementById('statsCanvas');
+const loadingOverlay = document.getElementById('loading-overlay');
+const scrollToPlayerButton = document.getElementById('scroll-to-player');
 
 let playerNames = [];
 let sqliteLinks = new Map();
@@ -57,6 +59,9 @@ window.addEventListener('orientationchange', () => {
 });
 
 async function loadStats() {
+  // Sobald wir starten, zeigen wir den Ladezustand prominent an, damit Nutzer wissen, dass Daten nachgeladen werden.
+  setLoadingOverlayVisibility(true);
+
   try {
     const [winnerData, listCsv, linksCsv] = await Promise.all([
       fetchJson(WINNER_URL, 'winner stats'),
@@ -76,6 +81,19 @@ async function loadStats() {
     console.error(error);
     openStatsGrid.innerHTML = `<p class="no-results">${error.message}. Check the JSON endpoint.</p>`;
     playerResultsContainer.innerHTML = `<p class="no-results">${error.message}. Player search unavailable.</p>`;
+  } finally {
+    // Egal ob Erfolg oder Fehler: den Ladebildschirm ausblenden, damit die Seite bedienbar bleibt.
+    setLoadingOverlayVisibility(false);
+  }
+}
+
+function setLoadingOverlayVisibility(show) {
+  // Das Overlay wird über das hidden-Attribut gesteuert, um Layout-Shifts zu vermeiden.
+  if (!loadingOverlay) return;
+  if (show) {
+    loadingOverlay.removeAttribute('hidden');
+  } else {
+    loadingOverlay.setAttribute('hidden', '');
   }
 }
 
@@ -692,5 +710,15 @@ playerSearchInput.addEventListener('input', () => {
 });
 sortFieldSelect.addEventListener('change', () => currentPlayer && renderPlayerResults(currentPlayer));
 sortOrderSelect.addEventListener('change', () => currentPlayer && renderPlayerResults(currentPlayer));
+
+if (scrollToPlayerButton) {
+  // Direkter Sprung zu den Player Stats für bessere Navigation auf dem Handy.
+  scrollToPlayerButton.addEventListener('click', () => {
+    const target = document.getElementById('player-stats');
+    if (target && typeof target.scrollIntoView === 'function') {
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  });
+}
 
 loadStats();
