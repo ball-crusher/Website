@@ -27,62 +27,50 @@
               Monitor daily winners, dive into complete leaderboards, and study player trajectories with an interface that measures your device and scales every element for a distortion-free mobile experience.
             </p>
           </div>
+          <!-- Canvas Visual (Optional, wird durch CSS gesteuert) -->
           <figure class="hero__visual">
-            <canvas
-              id="statsCanvas"
-              width="480"
-              height="320"
-              aria-label="Animated winner timeline"
-            ></canvas>
-            <figcaption class="hero__hint">Live winner timeline</figcaption>
+             <canvas id="statsCanvas" style="display: none;"></canvas> <!-- Ausgeblendet für den Fokus auf Daten -->
           </figure>
         </div>
       </header>
 
-      <main class="main" id="content">
-        <section id="open-stats" class="panel" aria-labelledby="open-stats-title">
-          <div class="panel__header">
-            <h2 id="open-stats-title" class="panel__title">Open Stats</h2>
-            <span class="panel__subtitle">Tap any day to open a phone-tuned leaderboard</span>
+      <main class="main-content">
+        <!-- SEKTION 1: OPEN STATS (Winners) -->
+        <section class="section" aria-labelledby="open-stats-title">
+          <div class="section__header">
+            <h2 id="open-stats-title" class="section__title">Daily Winners</h2>
+            <p class="section__subtitle">The fastest runs of each day.</p>
           </div>
-          <div id="open-stats-grid" class="card-grid" role="list"></div>
+          <!-- Hier werden die Daten aus winner.json eingefügt -->
+          <div id="open-stats-grid" class="stats-grid">
+            <p class="loading-text">Loading daily stats...</p>
+          </div>
         </section>
 
-        <section id="player-stats" class="panel" aria-labelledby="player-stats-title">
-          <div class="panel__header">
-            <h2 id="player-stats-title" class="panel__title">Player Stats</h2>
-            <span class="panel__subtitle">Search any athlete and auto-scale their daily stats</span>
+        <!-- SEKTION 2: PLAYER SEARCH (SQLite Chunks) -->
+        <section class="section" aria-labelledby="player-stats-title">
+          <div class="section__header">
+            <h2 id="player-stats-title" class="section__title">Player History</h2>
+            <p class="section__subtitle">Search for any player to fetch their full history.</p>
           </div>
-          <div class="search-panel">
-            <div class="search-controls">
+
+          <div class="search-container">
+            <div class="controls">
               <label for="player-search">
                 Player name
                 <input
                   type="search"
                   id="player-search"
                   name="player-search"
-                  placeholder="e.g. player1"
+                  placeholder="e.g. zahirorr"
                   autocomplete="off"
                   list="player-suggestions"
                 />
                 <datalist id="player-suggestions"></datalist>
               </label>
-              <label for="sort-field">
-                Sort by
-                <select id="sort-field" name="sort-field">
-                  <option value="day">Day</option>
-                  <option value="rank">Rank</option>
-                  <option value="time">Time</option>
-                </select>
-              </label>
-              <label for="sort-order">
-                Order
-                <select id="sort-order" name="sort-order">
-                  <option value="asc">Ascending</option>
-                  <option value="desc">Descending</option>
-                </select>
-              </label>
             </div>
+            
+            <!-- Hier kommen die SQLite Ergebnisse rein -->
             <div id="player-results" class="player-results" aria-live="polite">
               <p class="no-results">Search for a player to see results.</p>
             </div>
@@ -91,10 +79,12 @@
       </main>
 
       <footer class="page__footer">
-        Data refreshes daily. Keep <code>day_stats.json</code> in sync on GitHub to surface the latest runs.
+        Data refreshes daily. Powered by SQLite Sharding.
       </footer>
     </div>
 
+    <!-- WICHTIG: SQL.js Bibliothek vor app.js laden -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js"></script>
     <script src="assets/js/app.js" type="module"></script>
   </body>
 </html>
