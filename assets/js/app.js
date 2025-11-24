@@ -1,5 +1,12 @@
-const DATA_URL = 'data/day_stats.json';
+import initSqlJs from 'https://cdn.jsdelivr.net/npm/sql.js@1.10.2/dist/sql-wasm.js';
 
+// Zentrale Datenquellen und Einstellungen, damit alle URLs leicht anpassbar bleiben.
+const WINNER_DATA_URL = 'data/winner.json';
+const PLAYER_LIST_URL = 'https://ball-crusher.github.io/Website/data/liste.csv';
+const SQLITE_LINKS_URL = 'https://ball-crusher.github.io/Website/data/players_sqlite_links.csv';
+const RECORDS_PER_BUCKET = 7000; // So viele Spieler stecken in einer SQLite-Datei.
+
+// DOM-Referenzen, damit wir wiederkehrende Abfragen vermeiden und schneller rendern.
 const root = document.documentElement;
 const openStatsGrid = document.getElementById('open-stats-grid');
 const playerSearchInput = document.getElementById('player-search');
@@ -9,11 +16,20 @@ const sortFieldSelect = document.getElementById('sort-field');
 const sortOrderSelect = document.getElementById('sort-order');
 const canvas = document.getElementById('statsCanvas');
 
-let playerIndex = new Map();
+// Laufende Zustände, damit wir Daten wiederverwenden können ohne neu zu laden.
+let playerNames = [];
+let nameToIndex = new Map();
+let sqliteLinkLookup = new Map();
+let playerRecordsCache = new Map();
 let currentPlayer = null;
 let winnerTimeline = [];
 let canvasAnimationId = null;
 let canvasResizeHandler = null;
+
+// sql.js benötigt die zugehörige WASM-Datei. Über locateFile geben wir den CDN-Pfad an.
+const sqlJsPromise = initSqlJs({
+  locateFile: (file) => `https://cdn.jsdelivr.net/npm/sql.js@1.10.2/dist/${file}`,
+});
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -47,45 +63,41 @@ window.addEventListener('orientationchange', () => {
   }
 });
 
-async function loadStats() {
+// Alle Start-Ladevorgänge bündeln, damit wir Fehler gezielt abfangen können.
+const openStatsPromise = loadOpenStats();
+const playerListPromise = loadPlayerNameIndex();
+const sqliteLinksPromise = loadSqliteLinkMap();
+
+async function loadOpenStats() {
   try {
-    const response = await fetch(DATA_URL, { cache: 'no-cache' });
+    const response = await fetch(WINNER_DATA_URL, { cache: 'no-cache' });
     if (!response.ok) {
       throw new Error(`Failed to load stats (${response.status})`);
     }
+
     const data = await response.json();
     if (!data || !Array.isArray(data.day_stats)) {
-      throw new Error('Unexpected data format');
+      throw new Error('Unexpected data format for winner.json');
     }
-    initialize(data.day_stats);
+
+    const sortedDays = [...data.day_stats].sort((a, b) => b.day - a.day);
+    winnerTimeline = buildWinnerTimeline(sortedDays);
+    renderOpenStats(sortedDays);
+    startCanvasAnimation();
   } catch (error) {
     console.error(error);
     openStatsGrid.innerHTML = `<p class="no-results">${error.message}. Check the JSON endpoint.</p>`;
-    playerResultsContainer.innerHTML = `<p class="no-results">${error.message}. Player search unavailable.</p>`;
   }
-}
-
-function initialize(dayStats) {
-  const sortedDays = [...dayStats].sort((a, b) => b.day - a.day);
-  winnerTimeline = buildWinnerTimeline(sortedDays);
-  renderOpenStats(sortedDays);
-  buildPlayerIndex(sortedDays);
-  populatePlayerSuggestions();
-  startCanvasAnimation();
 }
 
 function buildWinnerTimeline(days) {
   return days
-    .map((day) => {
-      const winner = [...day.players].sort((a, b) => a.rank - b.rank)[0];
-      if (!winner) return null;
-      return {
-        day: day.day,
-        name: winner.name,
-        time: winner.time,
-        seconds: parseTimeToSeconds(winner.time),
-      };
-    })
+    .map((day) => ({
+      day: day.day,
+      name: day.name,
+      time: day.time,
+      seconds: parseTimeToSeconds(day.time),
+    }))
     .filter(Boolean)
     .sort((a, b) => a.day - b.day);
 }
@@ -98,6 +110,7 @@ function renderOpenStats(days) {
   }
 
   days.forEach((day) => {
+    // Kompakte Karte ohne aufklappbare Liste, weil nur die Gewinner angezeigt werden.
     const card = document.createElement('article');
     card.className = 'day-card';
     card.setAttribute('role', 'listitem');
@@ -111,115 +124,89 @@ function renderOpenStats(days) {
 
     const winnerInfo = document.createElement('div');
     winnerInfo.className = 'winner';
-    const topPlayer = [...day.players].sort((a, b) => a.rank - b.rank)[0];
     const winnerLink = document.createElement('a');
-    winnerLink.href = buildInstagramLink(topPlayer?.name);
+    winnerLink.href = buildInstagramLink(day.name);
     winnerLink.target = '_blank';
     winnerLink.rel = 'noopener noreferrer';
-    winnerLink.textContent = topPlayer ? topPlayer.name : '—';
+    winnerLink.textContent = day.name || '—';
 
     const winnerLabel = document.createElement('span');
     winnerLabel.textContent = 'Daily winner';
     winnerInfo.append(winnerLink, winnerLabel);
 
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'details-button';
-    button.textContent = 'More details';
-    button.setAttribute('aria-expanded', 'false');
+    const details = document.createElement('div');
+    details.className = 'player-time';
+    details.textContent = day.time ? `Time: ${day.time}` : 'Time unavailable';
 
-    header.append(label, winnerInfo, button);
+    const playerCount = document.createElement('div');
+    playerCount.className = 'player-time';
+    playerCount.textContent = Number.isFinite(day.players)
+      ? `Players: ${day.players}`
+      : 'Players: —';
 
-    const collapse = document.createElement('div');
-    collapse.className = 'collapse';
-    const collapseId = `day-${day.day}-details`;
-    collapse.id = collapseId;
-    collapse.hidden = true;
-    button.setAttribute('aria-controls', collapseId);
-
-    const list = document.createElement('ul');
-    list.className = 'player-list';
-
-    [...day.players]
-      .sort((a, b) => a.rank - b.rank)
-      .forEach((player) => {
-        const item = document.createElement('li');
-
-        const left = document.createElement('div');
-        left.className = 'player-name';
-        left.innerHTML = `<strong>${ordinal(player.rank)}</strong> &nbsp; <a href="${buildInstagramLink(
-          player.name
-        )}" target="_blank" rel="noopener noreferrer">${player.name}</a>`;
-
-        const right = document.createElement('span');
-        right.className = 'player-time';
-        right.textContent = `Time: ${player.time}`;
-
-        item.append(left, right);
-        list.append(item);
-      });
-
-    collapse.append(list);
-
-    button.addEventListener('click', () => {
-      const isOpen = collapse.classList.toggle('open');
-      collapse.hidden = !isOpen;
-      button.setAttribute('aria-expanded', String(isOpen));
-      button.textContent = isOpen ? 'Hide details' : 'More details';
-
-      if (isOpen) {
-        document.querySelectorAll('.collapse.open').forEach((openSection) => {
-          if (openSection === collapse) return;
-          openSection.classList.remove('open');
-          openSection.hidden = true;
-          const toggle = openSection.previousElementSibling?.querySelector?.('.details-button');
-          if (toggle) {
-            toggle.setAttribute('aria-expanded', 'false');
-            toggle.textContent = 'More details';
-          }
-        });
-
-        if (typeof collapse.scrollIntoView === 'function') {
-          requestAnimationFrame(() => {
-            collapse.scrollIntoView({ block: 'start', behavior: 'smooth' });
-          });
-        }
-      }
-    });
-
-    card.append(header, collapse);
+    header.append(label, winnerInfo, details, playerCount);
+    card.append(header);
     openStatsGrid.append(card);
   });
 }
 
-function buildPlayerIndex(days) {
-  playerIndex = new Map();
+async function loadPlayerNameIndex() {
+  try {
+    const response = await fetch(PLAYER_LIST_URL, { cache: 'no-cache' });
+    if (!response.ok) {
+      throw new Error(`Failed to load player list (${response.status})`);
+    }
 
-  days.forEach((day) => {
-    day.players.forEach((player) => {
-      const key = player.name.trim().toLowerCase();
-      if (!playerIndex.has(key)) {
-        playerIndex.set(key, {
-          name: player.name,
-          records: [],
-        });
+    const csv = await response.text();
+    const names = csv
+      .split(/\r?\n/)
+      .map((name) => name.trim())
+      .filter(Boolean);
+
+    playerNames = names;
+    nameToIndex = new Map();
+
+    names.forEach((name, index) => {
+      const key = name.toLowerCase();
+      if (!nameToIndex.has(key)) {
+        nameToIndex.set(key, index);
       }
-      const entry = playerIndex.get(key);
-      entry.records.push({
-        day: day.day,
-        rank: player.rank,
-        time: player.time,
-        seconds: parseTimeToSeconds(player.time),
-      });
     });
-  });
+
+    populatePlayerSuggestions();
+  } catch (error) {
+    console.error(error);
+    playerResultsContainer.innerHTML = `<p class="no-results">${error.message}. Player search unavailable.</p>`;
+  }
+}
+
+async function loadSqliteLinkMap() {
+  try {
+    const response = await fetch(SQLITE_LINKS_URL, { cache: 'no-cache' });
+    if (!response.ok) {
+      throw new Error(`Failed to load SQLite link map (${response.status})`);
+    }
+
+    const csv = await response.text();
+    const lines = csv.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+
+    sqliteLinkLookup = new Map();
+
+    lines.forEach((line, index) => {
+      if (index === 0 && line.toLowerCase().includes('filename')) return;
+      const [filename, url] = line.split(',').map((value) => value.trim());
+      if (filename && url) {
+        sqliteLinkLookup.set(filename, url);
+      }
+    });
+  } catch (error) {
+    console.error(error);
+  }
 }
 
 function populatePlayerSuggestions() {
   playerSuggestions.innerHTML = '';
-  const sortedPlayers = Array.from(playerIndex.values())
-    .map((entry) => entry.name)
-    .sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' }));
+  const sortedPlayers = [...playerNames].sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' }));
 
   sortedPlayers.forEach((name) => {
     const option = document.createElement('option');
@@ -228,9 +215,12 @@ function populatePlayerSuggestions() {
   });
 }
 
-function updatePlayerResults(options = {}) {
+async function updatePlayerResults(options = {}) {
   const { silentOnNoMatch = false } = options;
   const query = playerSearchInput.value.trim();
+
+  await Promise.all([playerListPromise, sqliteLinksPromise]);
+
   if (!query) {
     currentPlayer = null;
     playerResultsContainer.innerHTML = '<p class="no-results">Search for a player to see results.</p>';
@@ -238,19 +228,8 @@ function updatePlayerResults(options = {}) {
   }
 
   const normalized = query.toLowerCase();
-  let entry = playerIndex.get(normalized);
-
-  if (!entry && normalized.length >= 2) {
-    const partialMatches = Array.from(playerIndex.entries())
-      .map(([key, value]) => ({ key, value }))
-      .filter(({ key, value }) => value.name.toLowerCase().includes(normalized));
-
-    if (partialMatches.length === 1) {
-      entry = partialMatches[0].value;
-    }
-  }
-
-  if (!entry) {
+  const index = nameToIndex.get(normalized);
+  if (typeof index !== 'number') {
     currentPlayer = null;
     if (!silentOnNoMatch) {
       playerResultsContainer.innerHTML = `<p class="no-results">No results for "${query}".</p>`;
@@ -258,8 +237,132 @@ function updatePlayerResults(options = {}) {
     return;
   }
 
-  currentPlayer = entry;
-  renderPlayerResults(entry);
+  const canonicalName = playerNames[index] || query;
+  playerResultsContainer.innerHTML = '<p class="no-results">Loading player data…</p>';
+
+  const playerData = await resolvePlayerRecords(canonicalName, index);
+
+  if (!playerData || !playerData.records.length) {
+    currentPlayer = null;
+    playerResultsContainer.innerHTML = `<p class="no-results">No data found for "${canonicalName}".</p>`;
+    return;
+  }
+
+  currentPlayer = playerData;
+  renderPlayerResults(playerData);
+}
+
+async function resolvePlayerRecords(name, index) {
+  const normalizedName = name.toLowerCase();
+  if (playerRecordsCache.has(normalizedName)) {
+    return playerRecordsCache.get(normalizedName);
+  }
+
+  const baseBucket = Math.max(1, Math.floor((index + 1) / RECORDS_PER_BUCKET));
+  const bucketOrder = buildBucketSearchOrder(baseBucket);
+
+  for (const bucket of bucketOrder) {
+    const filename = `players_${bucket}.sqlite`;
+    const url = sqliteLinkLookup.get(filename);
+    if (!url) continue;
+
+    try {
+      const db = await loadSqliteDatabase(url);
+      const match = extractPlayerFromDatabase(db, normalizedName);
+      if (match) {
+        const entry = {
+          name: match.username || name,
+          records: match.records.map((record) => ({
+            day: Number(record.day),
+            rank: Number(record.rank),
+            time: record.time,
+            seconds: parseTimeToSeconds(record.time),
+          })),
+        };
+
+        playerRecordsCache.set(normalizedName, entry);
+        return entry;
+      }
+    } catch (error) {
+      console.error(`Failed to read ${filename}:`, error);
+    }
+  }
+
+  return null;
+}
+
+function buildBucketSearchOrder(baseBucket) {
+  // Wir suchen erst im vermuteten Bucket, dann abwechselnd +1/-1 usw.
+  const availableBuckets = new Set(
+    Array.from(sqliteLinkLookup.keys())
+      .map(extractBucketNumber)
+      .filter((value) => Number.isFinite(value)),
+  );
+
+  const order = [];
+  const seen = new Set();
+  const maxOffset = availableBuckets.size + 2;
+
+  const tryAdd = (bucket) => {
+    if (bucket < 1) return;
+    if (!availableBuckets.has(bucket)) return;
+    if (seen.has(bucket)) return;
+    seen.add(bucket);
+    order.push(bucket);
+  };
+
+  tryAdd(baseBucket);
+  for (let offset = 1; offset <= maxOffset; offset += 1) {
+    tryAdd(baseBucket + offset);
+    tryAdd(baseBucket - offset);
+  }
+
+  return order;
+}
+
+async function loadSqliteDatabase(url) {
+  const response = await fetch(url, { cache: 'no-cache' });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch database (${response.status})`);
+  }
+
+  const buffer = await response.arrayBuffer();
+  const SQL = await sqlJsPromise;
+  return new SQL.Database(new Uint8Array(buffer));
+}
+
+function extractPlayerFromDatabase(db, normalizedName) {
+  // SQLite-Abfrage: wir nutzen LOWER() für eine robuste Suche.
+  const statement = db.prepare('SELECT username, data FROM players WHERE lower(username) = ? LIMIT 1');
+  statement.bind([normalizedName]);
+  const hasResult = statement.step();
+
+  if (!hasResult) {
+    statement.free();
+    return null;
+  }
+
+  const row = statement.getAsObject();
+  statement.free();
+
+  if (!row || !row.data) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(row.data);
+    const records = Array.isArray(parsed)
+      ? parsed
+      : [];
+
+    return {
+      username: row.username,
+      records,
+    };
+  } catch (error) {
+    console.error('Failed to parse player JSON:', error);
+    return null;
+  }
 }
 
 function renderPlayerResults(entry) {
@@ -471,38 +574,36 @@ function parseTimeToSeconds(timeString) {
   return minutes * 60 + seconds;
 }
 
-function ordinal(rank) {
-  if (typeof rank !== 'number') return `${rank}.`;
-  const mod100 = rank % 100;
-  if (mod100 >= 11 && mod100 <= 13) {
-    return `${rank}th`;
-  }
-  const mod10 = rank % 10;
-  const suffix = mod10 === 1 ? 'st' : mod10 === 2 ? 'nd' : mod10 === 3 ? 'rd' : 'th';
-  return `${rank}${suffix}`;
-}
-
 function buildInstagramLink(name) {
   if (!name) return '#';
   const sanitized = name.replace(/[^a-z0-9._-]/gi, '');
   return `https://instagram.com/${sanitized}`;
 }
 
-playerSearchInput.addEventListener('change', () => updatePlayerResults());
+function extractBucketNumber(filename) {
+  const match = /players_(\d+)\.sqlite/i.exec(filename);
+  if (!match) return Number.NaN;
+  return Number(match[1]);
+}
+
+playerSearchInput.addEventListener('change', () => {
+  updatePlayerResults().catch((error) => console.error(error));
+});
 playerSearchInput.addEventListener('input', () => {
   if (!playerSearchInput.value) {
-    updatePlayerResults();
+    updatePlayerResults().catch((error) => console.error(error));
     return;
   }
 
   const normalized = playerSearchInput.value.trim().toLowerCase();
-  if (playerIndex.has(normalized)) {
-    updatePlayerResults();
+  if (nameToIndex.has(normalized)) {
+    updatePlayerResults().catch((error) => console.error(error));
   } else {
-    updatePlayerResults({ silentOnNoMatch: true });
+    updatePlayerResults({ silentOnNoMatch: true }).catch((error) => console.error(error));
   }
 });
 sortFieldSelect.addEventListener('change', () => currentPlayer && renderPlayerResults(currentPlayer));
 sortOrderSelect.addEventListener('change', () => currentPlayer && renderPlayerResults(currentPlayer));
 
-loadStats();
+// openStatsPromise wird schon beim Laden gestartet, daher reicht ein Aufruf zum Start.
+openStatsPromise.catch((error) => console.error(error));
