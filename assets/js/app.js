@@ -1,508 +1,256 @@
-const DATA_URL = 'data/day_stats.json';
+/* APP.JS - Ball Crusher Stats
+  Logic: 
+  1. Load winner.json for "Daily Winners"
+  2. Load liste.csv (names) & players_sqlite_links.csv (paths)
+  3. On search: Calculate index -> fetch specific SQLite chunk -> query data
+*/
 
-const root = document.documentElement;
-const openStatsGrid = document.getElementById('open-stats-grid');
-const playerSearchInput = document.getElementById('player-search');
-const playerResultsContainer = document.getElementById('player-results');
-const playerSuggestions = document.getElementById('player-suggestions');
-const sortFieldSelect = document.getElementById('sort-field');
-const sortOrderSelect = document.getElementById('sort-order');
-const canvas = document.getElementById('statsCanvas');
+// --- KONFIGURATION ---
+const URLS = {
+  winners: 'data/winner.json',
+  playerList: 'data/liste.csv',
+  sqliteLinks: 'data/players_sqlite_links.csv'
+};
+const CHUNK_SIZE = 7000; // Anzahl Spieler pro SQLite Datei
 
-let playerIndex = new Map();
-let currentPlayer = null;
-let winnerTimeline = [];
-let canvasAnimationId = null;
-let canvasResizeHandler = null;
+// --- GLOBALE VARIABLEN ---
+let SQL = null;           // SQL.js Instanz
+let playerNames = [];     // Array aller Namen aus liste.csv
+let sqliteMap = new Map(); // Map: 'players_1.sqlite' -> 'https://...'
 
-function clamp(value, min, max) {
-  return Math.min(Math.max(value, min), max);
-}
+// --- DOM ELEMENTE ---
+const ui = {
+  openStatsGrid: document.getElementById('open-stats-grid'),
+  searchInput: document.getElementById('player-search'),
+  suggestions: document.getElementById('player-suggestions'),
+  results: document.getElementById('player-results')
+};
 
-function applyMobileMetrics() {
-  const width = Math.max(window.innerWidth || document.documentElement.clientWidth || 0, 320);
-  const height = Math.max(window.innerHeight || document.documentElement.clientHeight || 0, 540);
-  const baseWidth = 390;
-  const baseHeight = 844;
-  const widthScale = width / baseWidth;
-  const heightScale = height / baseHeight;
-  const blendScale = widthScale * 0.65 + heightScale * 0.35;
-  const scale = clamp(blendScale, 0.85, 1.2);
-  const layoutWidth = clamp(width * 0.94, 320, 620);
-
-  root.style.setProperty('--scale', scale.toFixed(4));
-  root.style.setProperty('--layout-max-width', `${layoutWidth}px`);
-  root.style.setProperty('--viewport-width', `${width}px`);
-  root.style.setProperty('--viewport-height', `${height}px`);
-  root.style.setProperty('--vh', `${height * 0.01}px`);
-  root.style.setProperty('--vw', `${width * 0.01}px`);
-}
-
-applyMobileMetrics();
-window.addEventListener('resize', applyMobileMetrics, { passive: true });
-window.addEventListener('orientationchange', () => {
-  applyMobileMetrics();
-  if (typeof canvasResizeHandler === 'function') {
-    requestAnimationFrame(() => canvasResizeHandler());
-  }
-});
-
-async function loadStats() {
+// --- INITIALISIERUNG ---
+async function init() {
   try {
-    const response = await fetch(DATA_URL, { cache: 'no-cache' });
-    if (!response.ok) {
-      throw new Error(`Failed to load stats (${response.status})`);
-    }
-    const data = await response.json();
-    if (!data || !Array.isArray(data.day_stats)) {
-      throw new Error('Unexpected data format');
-    }
-    initialize(data.day_stats);
-  } catch (error) {
-    console.error(error);
-    openStatsGrid.innerHTML = `<p class="no-results">${error.message}. Check the JSON endpoint.</p>`;
-    playerResultsContainer.innerHTML = `<p class="no-results">${error.message}. Player search unavailable.</p>`;
-  }
-}
+    console.log("Starte App...");
 
-function initialize(dayStats) {
-  const sortedDays = [...dayStats].sort((a, b) => b.day - a.day);
-  winnerTimeline = buildWinnerTimeline(sortedDays);
-  renderOpenStats(sortedDays);
-  buildPlayerIndex(sortedDays);
-  populatePlayerSuggestions();
-  startCanvasAnimation();
-}
-
-function buildWinnerTimeline(days) {
-  return days
-    .map((day) => {
-      const winner = [...day.players].sort((a, b) => a.rank - b.rank)[0];
-      if (!winner) return null;
-      return {
-        day: day.day,
-        name: winner.name,
-        time: winner.time,
-        seconds: parseTimeToSeconds(winner.time),
-      };
-    })
-    .filter(Boolean)
-    .sort((a, b) => a.day - b.day);
-}
-
-function renderOpenStats(days) {
-  openStatsGrid.innerHTML = '';
-  if (!days.length) {
-    openStatsGrid.innerHTML = '<p class="no-results">No days available yet.</p>';
-    return;
-  }
-
-  days.forEach((day) => {
-    const card = document.createElement('article');
-    card.className = 'day-card';
-    card.setAttribute('role', 'listitem');
-
-    const header = document.createElement('div');
-    header.className = 'day-card-content';
-
-    const label = document.createElement('div');
-    label.className = 'day-label';
-    label.textContent = `Day ${day.day}`;
-
-    const winnerInfo = document.createElement('div');
-    winnerInfo.className = 'winner';
-    const topPlayer = [...day.players].sort((a, b) => a.rank - b.rank)[0];
-    const winnerLink = document.createElement('a');
-    winnerLink.href = buildInstagramLink(topPlayer?.name);
-    winnerLink.target = '_blank';
-    winnerLink.rel = 'noopener noreferrer';
-    winnerLink.textContent = topPlayer ? topPlayer.name : '—';
-
-    const winnerLabel = document.createElement('span');
-    winnerLabel.textContent = 'Daily winner';
-    winnerInfo.append(winnerLink, winnerLabel);
-
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'details-button';
-    button.textContent = 'More details';
-    button.setAttribute('aria-expanded', 'false');
-
-    header.append(label, winnerInfo, button);
-
-    const collapse = document.createElement('div');
-    collapse.className = 'collapse';
-    const collapseId = `day-${day.day}-details`;
-    collapse.id = collapseId;
-    collapse.hidden = true;
-    button.setAttribute('aria-controls', collapseId);
-
-    const list = document.createElement('ul');
-    list.className = 'player-list';
-
-    [...day.players]
-      .sort((a, b) => a.rank - b.rank)
-      .forEach((player) => {
-        const item = document.createElement('li');
-
-        const left = document.createElement('div');
-        left.className = 'player-name';
-        left.innerHTML = `<strong>${ordinal(player.rank)}</strong> &nbsp; <a href="${buildInstagramLink(
-          player.name
-        )}" target="_blank" rel="noopener noreferrer">${player.name}</a>`;
-
-        const right = document.createElement('span');
-        right.className = 'player-time';
-        right.textContent = `Time: ${player.time}`;
-
-        item.append(left, right);
-        list.append(item);
-      });
-
-    collapse.append(list);
-
-    button.addEventListener('click', () => {
-      const isOpen = collapse.classList.toggle('open');
-      collapse.hidden = !isOpen;
-      button.setAttribute('aria-expanded', String(isOpen));
-      button.textContent = isOpen ? 'Hide details' : 'More details';
-
-      if (isOpen) {
-        document.querySelectorAll('.collapse.open').forEach((openSection) => {
-          if (openSection === collapse) return;
-          openSection.classList.remove('open');
-          openSection.hidden = true;
-          const toggle = openSection.previousElementSibling?.querySelector?.('.details-button');
-          if (toggle) {
-            toggle.setAttribute('aria-expanded', 'false');
-            toggle.textContent = 'More details';
-          }
-        });
-
-        if (typeof collapse.scrollIntoView === 'function') {
-          requestAnimationFrame(() => {
-            collapse.scrollIntoView({ block: 'start', behavior: 'smooth' });
-          });
-        }
-      }
+    // 1. Lade SQL.js (WASM)
+    SQL = await window.initSqlJs({
+      // Wichtig: Zeige auf den CDN Pfad für die .wasm Datei
+      locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${file}`
     });
 
-    card.append(header, collapse);
-    openStatsGrid.append(card);
-  });
-}
+    // 2. Lade alle Daten parallel
+    await Promise.all([
+      loadWinners(),
+      loadPlayerList(),
+      loadSqliteLinks()
+    ]);
 
-function buildPlayerIndex(days) {
-  playerIndex = new Map();
+    // 3. Event Listener aktivieren
+    setupSearchEvents();
 
-  days.forEach((day) => {
-    day.players.forEach((player) => {
-      const key = player.name.trim().toLowerCase();
-      if (!playerIndex.has(key)) {
-        playerIndex.set(key, {
-          name: player.name,
-          records: [],
-        });
-      }
-      const entry = playerIndex.get(key);
-      entry.records.push({
-        day: day.day,
-        rank: player.rank,
-        time: player.time,
-        seconds: parseTimeToSeconds(player.time),
-      });
-    });
-  });
-}
+    console.log("App bereit!");
 
-function populatePlayerSuggestions() {
-  playerSuggestions.innerHTML = '';
-  const sortedPlayers = Array.from(playerIndex.values())
-    .map((entry) => entry.name)
-    .sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' }));
-
-  sortedPlayers.forEach((name) => {
-    const option = document.createElement('option');
-    option.value = name;
-    playerSuggestions.append(option);
-  });
-}
-
-function updatePlayerResults(options = {}) {
-  const { silentOnNoMatch = false } = options;
-  const query = playerSearchInput.value.trim();
-  if (!query) {
-    currentPlayer = null;
-    playerResultsContainer.innerHTML = '<p class="no-results">Search for a player to see results.</p>';
-    return;
+  } catch (err) {
+    console.error("Init Error:", err);
+    ui.openStatsGrid.innerHTML = `<p class="error">Failed to load data.</p>`;
   }
+}
 
-  const normalized = query.toLowerCase();
-  let entry = playerIndex.get(normalized);
+// Start
+init();
 
-  if (!entry && normalized.length >= 2) {
-    const partialMatches = Array.from(playerIndex.entries())
-      .map(([key, value]) => ({ key, value }))
-      .filter(({ key, value }) => value.name.toLowerCase().includes(normalized));
 
-    if (partialMatches.length === 1) {
-      entry = partialMatches[0].value;
+// --- DATEN LADEN ---
+
+// 1. Winner Stats (Startseite)
+async function loadWinners() {
+  const res = await fetch(URLS.winners);
+  const json = await res.json();
+  // Annahme: json hat Struktur { "day_stats": [...] }
+  const data = json.day_stats || json; 
+  
+  // Sortieren: Neueste Tage zuerst
+  data.sort((a, b) => b.day - a.day);
+
+  renderWinners(data);
+}
+
+// 2. Spieler Liste (CSV)
+async function loadPlayerList() {
+  const res = await fetch(URLS.playerList);
+  const text = await res.text();
+  // Split bei neuer Zeile, Leerzeichen entfernen
+  playerNames = text.split(/\r?\n/).map(n => n.trim()).filter(n => n.length > 0);
+  console.log(`${playerNames.length} Spieler geladen.`);
+}
+
+// 3. SQLite Links (CSV)
+async function loadSqliteLinks() {
+  const res = await fetch(URLS.sqliteLinks);
+  const text = await res.text();
+  const lines = text.split(/\r?\n/);
+  
+  // Überspringe Header (i=1)
+  for (let i = 1; i < lines.length; i++) {
+    const [filename, url] = lines[i].split(',');
+    if (filename && url) {
+      sqliteMap.set(filename.trim(), url.trim());
     }
   }
-
-  if (!entry) {
-    currentPlayer = null;
-    if (!silentOnNoMatch) {
-      playerResultsContainer.innerHTML = `<p class="no-results">No results for "${query}".</p>`;
-    }
-    return;
-  }
-
-  currentPlayer = entry;
-  renderPlayerResults(entry);
 }
 
-function renderPlayerResults(entry) {
-  const field = sortFieldSelect.value;
-  const order = sortOrderSelect.value;
-  const multiplier = order === 'asc' ? 1 : -1;
 
-  const sortedRecords = [...entry.records].sort((a, b) => {
-    if (field === 'day') {
-      return (a.day - b.day) * multiplier;
-    }
-    if (field === 'rank') {
-      return (a.rank - b.rank) * multiplier;
-    }
-    if (field === 'time') {
-      return (a.seconds - b.seconds) * multiplier;
-    }
-    return 0;
-  });
+// --- RENDERING (HTML ERSTELLEN) ---
 
-  playerResultsContainer.innerHTML = '';
-
-  sortedRecords.forEach((record) => {
-    const card = document.createElement('article');
-    card.className = 'player-result-card';
-
-    const meta = document.createElement('div');
-    meta.className = 'meta';
-    meta.innerHTML = `
-      <span class="badge">Day ${record.day}</span>
-      <strong>${entry.name}</strong>
-      <span class="time-badge">Time: ${record.time}</span>
+function renderWinners(stats) {
+  ui.openStatsGrid.innerHTML = '';
+  
+  // Wir zeigen z.B. die letzten 12 Tage an
+  stats.slice(0, 12).forEach(stat => {
+    const card = document.createElement('div');
+    card.className = 'stat-card';
+    card.innerHTML = `
+      <div class="day-badge">Day ${stat.day}</div>
+      <div class="stat-info">
+        <span class="winner-name">${stat.name}</span>
+        <code class="winner-time">${stat.time}</code>
+      </div>
+      <div class="stat-meta">
+        ${stat.players ? `<span>Top of ${stat.players.toLocaleString()}</span>` : ''}
+      </div>
     `;
-
-    const rank = document.createElement('span');
-    rank.className = 'badge rank-badge';
-    rank.textContent = `Rank ${record.rank}`;
-
-    card.append(meta, rank);
-    playerResultsContainer.append(card);
+    ui.openStatsGrid.appendChild(card);
   });
-
-  if (!sortedRecords.length) {
-    playerResultsContainer.innerHTML = '<p class="no-results">No stats available.</p>';
-  }
 }
 
-function startCanvasAnimation() {
-  if (canvasAnimationId) {
-    cancelAnimationFrame(canvasAnimationId);
-    canvasAnimationId = null;
-  }
+function renderPlayerHistory(username, historyData) {
+  // historyData ist das JSON Array aus der SQLite DB
+  // Sortieren nach Tag absteigend
+  historyData.sort((a, b) => b.day - a.day);
 
-  if (canvasResizeHandler) {
-    window.removeEventListener('resize', canvasResizeHandler);
-    canvasResizeHandler = null;
-  }
+  let html = `<div class="history-header"><h3>History: ${username}</h3></div>`;
+  html += `<div class="stats-grid">`;
 
-  if (!canvas || !canvas.getContext || !winnerTimeline.length) {
-    return;
-  }
+  historyData.forEach(entry => {
+    html += `
+      <div class="stat-card">
+        <div class="day-badge">Day ${entry.day}</div>
+        <div class="stat-row">Rank: <strong>${entry.rank}</strong></div>
+        <div class="stat-row">Time: <code>${entry.time}</code></div>
+      </div>
+    `;
+  });
+  html += `</div>`;
 
-  const ctx = canvas.getContext('2d');
-  const times = winnerTimeline.map((entry) => entry.seconds).filter((value) => Number.isFinite(value));
-  const minTime = times.length ? Math.min(...times) : 0;
-  const maxTime = times.length ? Math.max(...times) : 1;
-  const dayCount = winnerTimeline.length;
-  const duration = 10000;
-  let width = canvas.clientWidth || canvas.width;
-  let height = canvas.clientHeight || canvas.height;
-  let padding = 24;
-  let stepX = 0;
-  let start = null;
+  ui.results.innerHTML = html;
+}
 
-  function configureDimensions() {
-    const parentWidth = canvas.parentElement?.clientWidth || window.innerWidth || 360;
-    const styles = getComputedStyle(root);
-    const layoutMax = parseFloat(styles.getPropertyValue('--layout-max-width')) || parentWidth;
-    const viewportWidth = parseFloat(styles.getPropertyValue('--viewport-width')) || parentWidth;
-    const viewportHeight = parseFloat(styles.getPropertyValue('--viewport-height')) || window.innerHeight || 640;
-    const maxWidth = Math.min(layoutMax, viewportWidth * 0.96);
-    const cssWidth = Math.min(parentWidth, Math.max(280, maxWidth));
-    const cssHeight = clamp(Math.round(cssWidth * 0.64), 200, Math.round(viewportHeight * 0.42));
-    const dpr = window.devicePixelRatio || 1;
 
-    canvas.style.width = `${cssWidth}px`;
-    canvas.style.height = `${cssHeight}px`;
-    canvas.width = Math.round(cssWidth * dpr);
-    canvas.height = Math.round(cssHeight * dpr);
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+// --- SUCH LOGIK (CORE) ---
 
-    width = cssWidth;
-    height = cssHeight;
-    padding = Math.max(22, Math.round(cssWidth * 0.1));
-    stepX = dayCount > 1 ? (width - padding * 2) / (dayCount - 1) : 0;
-  }
+function setupSearchEvents() {
+  // Autocomplete
+  ui.searchInput.addEventListener('input', (e) => {
+    const val = e.target.value.toLowerCase();
+    ui.suggestions.innerHTML = '';
+    
+    if (val.length < 2) return;
 
-  function mapY(seconds) {
-    if (!Number.isFinite(seconds)) {
-      return height / 2;
-    }
-    if (maxTime === minTime) {
-      return height / 2;
-    }
-    const normalized = (seconds - minTime) / (maxTime - minTime);
-    return height - padding - normalized * (height - padding * 2);
-  }
-
-  function drawFrame(timestamp) {
-    if (start === null) {
-      start = timestamp;
-    }
-    const elapsed = (timestamp - start) % duration;
-    const progress = elapsed / duration;
-
-    ctx.clearRect(0, 0, width, height);
-
-    const gradient = ctx.createLinearGradient(0, 0, width, height);
-    gradient.addColorStop(0, 'rgba(6, 200, 255, 0.35)');
-    gradient.addColorStop(1, 'rgba(6, 200, 255, 0)');
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, width, height);
-
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(padding, padding);
-    ctx.lineTo(padding, height - padding);
-    ctx.lineTo(width - padding, height - padding);
-    ctx.stroke();
-
-    ctx.lineWidth = 2.4;
-    ctx.strokeStyle = 'rgba(6, 200, 255, 0.9)';
-    ctx.beginPath();
-
-    winnerTimeline.forEach((entry, index) => {
-      const x = padding + index * stepX;
-      const y = mapY(entry.seconds);
-      if (index === 0) {
-        ctx.moveTo(x, y);
-      } else {
-        const visibleProgress = progress * Math.max(dayCount - 1, 1);
-        if (index - 1 <= visibleProgress) {
-          ctx.lineTo(x, y);
-        }
-      }
+    // Finde Top 5 Matches für die Liste
+    const matches = playerNames.filter(n => n.toLowerCase().includes(val)).slice(0, 5);
+    matches.forEach(name => {
+      const opt = document.createElement('option');
+      opt.value = name;
+      ui.suggestions.appendChild(opt);
     });
 
-    ctx.stroke();
+    // Wenn exakter Match, lade sofort (optional)
+    // if (playerNames.includes(ui.searchInput.value)) handleSearch(ui.searchInput.value);
+  });
 
-    const cursorProgress = progress * Math.max(dayCount - 1, 1);
-    const baseIndex = Math.floor(cursorProgress);
-    const fractional = cursorProgress - baseIndex;
-
-    const current = winnerTimeline[Math.min(baseIndex, dayCount - 1)];
-    const next = winnerTimeline[Math.min(baseIndex + 1, dayCount - 1)];
-
-    const currentX = padding + baseIndex * stepX;
-    const currentY = mapY(current.seconds);
-
-    let x = currentX;
-    let y = currentY;
-
-    if (next && baseIndex < dayCount - 1) {
-      const nextX = padding + (baseIndex + 1) * stepX;
-      const nextY = mapY(next.seconds);
-      x = currentX + (nextX - currentX) * fractional;
-      y = currentY + (nextY - currentY) * fractional;
-    }
-
-    const glow = ctx.createRadialGradient(x, y, 0, x, y, 28);
-    glow.addColorStop(0, 'rgba(6, 200, 255, 0.55)');
-    glow.addColorStop(1, 'rgba(6, 200, 255, 0)');
-    ctx.fillStyle = glow;
-    ctx.beginPath();
-    ctx.arc(x, y, 28, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = '#06c8ff';
-    ctx.beginPath();
-    ctx.arc(x, y, 6, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
-    ctx.font = '14px Inter, sans-serif';
-    ctx.fillText(`Day ${current.day} – ${current.name}`, padding, padding - 8);
-
-    canvasAnimationId = requestAnimationFrame(drawFrame);
-  }
-
-  canvasResizeHandler = () => {
-    if (canvasAnimationId) {
-      cancelAnimationFrame(canvasAnimationId);
-    }
-    configureDimensions();
-    start = null;
-    canvasAnimationId = requestAnimationFrame(drawFrame);
-  };
-
-  configureDimensions();
-  canvasAnimationId = requestAnimationFrame(drawFrame);
-  window.addEventListener('resize', canvasResizeHandler, { passive: true });
+  // Bei Enter oder Klick
+  ui.searchInput.addEventListener('change', () => {
+    const val = ui.searchInput.value.trim();
+    if (val) handleSearch(val);
+  });
 }
 
-function parseTimeToSeconds(timeString) {
-  if (typeof timeString !== 'string') return Number.POSITIVE_INFINITY;
-  const [minutes, seconds] = timeString.split(':').map(Number);
-  if (Number.isNaN(minutes) || Number.isNaN(seconds)) return Number.POSITIVE_INFINITY;
-  return minutes * 60 + seconds;
-}
+async function handleSearch(username) {
+  ui.results.innerHTML = '<p class="loading">Locating player data...</p>';
 
-function ordinal(rank) {
-  if (typeof rank !== 'number') return `${rank}.`;
-  const mod100 = rank % 100;
-  if (mod100 >= 11 && mod100 <= 13) {
-    return `${rank}th`;
-  }
-  const mod10 = rank % 10;
-  const suffix = mod10 === 1 ? 'st' : mod10 === 2 ? 'nd' : mod10 === 3 ? 'rd' : 'th';
-  return `${rank}${suffix}`;
-}
-
-function buildInstagramLink(name) {
-  if (!name) return '#';
-  const sanitized = name.replace(/[^a-z0-9._-]/gi, '');
-  return `https://instagram.com/${sanitized}`;
-}
-
-playerSearchInput.addEventListener('change', () => updatePlayerResults());
-playerSearchInput.addEventListener('input', () => {
-  if (!playerSearchInput.value) {
-    updatePlayerResults();
+  // 1. Suche Index in der großen Liste
+  const index = playerNames.indexOf(username);
+  
+  if (index === -1) {
+    ui.results.innerHTML = '<p class="no-results">Player name not found in list.</p>';
     return;
   }
 
-  const normalized = playerSearchInput.value.trim().toLowerCase();
-  if (playerIndex.has(normalized)) {
-    updatePlayerResults();
-  } else {
-    updatePlayerResults({ silentOnNoMatch: true });
-  }
-});
-sortFieldSelect.addEventListener('change', () => currentPlayer && renderPlayerResults(currentPlayer));
-sortOrderSelect.addEventListener('change', () => currentPlayer && renderPlayerResults(currentPlayer));
+  // 2. Berechne Chunk ID
+  // Formel: Index / 7000. +1 weil Dateien bei 1 anfangen (players_1.sqlite)
+  const baseChunkId = Math.floor(index / CHUNK_SIZE) + 1;
+  
+  console.log(`Suche '${username}' (Index ${index}). Start-Chunk: ${baseChunkId}`);
 
-loadStats();
+  // 3. Suche in Chunk und Nachbarn
+  const data = await findInChunksRecursive(username, baseChunkId);
+
+  if (data) {
+    renderPlayerHistory(username, data);
+  } else {
+    ui.results.innerHTML = '<p class="no-results">Found in name list, but no data in DB files.</p>';
+  }
+}
+
+// Rekursive Suche (Start, +1, -1, +2, -2)
+async function findInChunksRecursive(username, startId) {
+  // Such-Reihenfolge: [0, 1, -1, 2, -2]
+  const offsets = [0, 1, -1, 2, -2];
+
+  for (let offset of offsets) {
+    const chunkId = startId + offset;
+    const filename = `players_${chunkId}.sqlite`;
+
+    if (!sqliteMap.has(filename)) continue;
+
+    const url = sqliteMap.get(filename);
+    
+    try {
+      console.log(`Checking ${filename}...`);
+      const result = await fetchAndQueryDB(url, username);
+      if (result) return result; // Gefunden!
+    } catch (e) {
+      console.warn(`Fehler bei ${filename}:`, e);
+    }
+  }
+  return null; // Nichts gefunden
+}
+
+// --- SQLITE HELPER ---
+
+async function fetchAndQueryDB(url, username) {
+  // 1. Datei holen
+  const response = await fetch(url);
+  const buffer = await response.arrayBuffer();
+
+  // 2. DB öffnen
+  const db = new SQL.Database(new Uint8Array(buffer));
+
+  // 3. Query ausführen
+  // Tabelle: players(id, username, data)
+  let result = null;
+  try {
+    const stmt = db.prepare("SELECT data FROM players WHERE username = :user");
+    const row = stmt.getAsObject({':user': username});
+    
+    if (row && row.data) {
+      result = JSON.parse(row.data);
+    }
+    stmt.free();
+  } catch (e) {
+    console.error("SQL Error:", e);
+  } finally {
+    db.close(); // Speicher freigeben
+  }
+
+  return result;
+}
