@@ -288,7 +288,7 @@ function updatePlayerResults() {
     return;
   }
 
-  playerResultsContainer.innerHTML = '<p class="no-results">Loading player data…</p>';
+  playerResultsContainer.innerHTML = '<p class="no-results">Loading player data…(Can take up to 5 minutes under server stress)</p>';
 
   lookupPlayer(query)
     .then((entry) => {
