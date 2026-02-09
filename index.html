@@ -17,6 +17,12 @@
     <link rel="stylesheet" href="assets/css/styles.css" />
   </head>
   <body>
+    <div id="loading-overlay" class="loading-overlay" role="status" aria-live="polite">
+      <div class="loading-overlay__content">
+        <div class="loading-overlay__spinner" aria-hidden="true"></div>
+        <p class="loading-overlay__text">Loading Data…</p>
+      </div>
+    </div>
     <div class="page">
       <header class="hero" role="banner">
         <div class="hero__container">
@@ -26,6 +32,7 @@
             <p class="hero__description">
               Monitor daily winners, dive into complete leaderboards, and study player trajectories with an interface that measures your device and scales every element for a distortion-free mobile experience.
             </p>
+            <button id="scroll-to-player" class="cta-button" type="button">View Player Stats</button>
           </div>
           <figure class="hero__visual">
             <canvas
